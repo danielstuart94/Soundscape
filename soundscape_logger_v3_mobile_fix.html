@@ -1,0 +1,344 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Live Soundscape Logger (v3 - Mobile Fix)</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 18px; max-width: 900px; }
+    .row { margin: 12px 0; }
+    button { padding: 12px 16px; margin-right: 8px; font-size: 16px; }
+    input, select { padding: 8px; font-size: 16px; }
+    .meter { height: 18px; background: #eee; border: 1px solid #ccc; border-radius: 6px; overflow: hidden; }
+    .bar { height: 100%; width: 0%; background: #444; }
+    table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    th, td { border: 1px solid #ddd; padding: 6px; }
+    th { background: #f3f3f3; text-align: left; }
+    .note { font-size: 12px; color: #555; line-height: 1.35; }
+    .card { border:1px solid #ddd; padding: 12px; border-radius: 10px; }
+    .grid { display:grid; grid-template-columns: 1fr; gap: 12px; }
+    @media (min-width: 800px){ .grid { grid-template-columns: 1fr 1fr; } }
+    code { background:#f6f6f6; padding:2px 4px; border:1px solid #eee; border-radius:4px; }
+    .warn { color:#8a0000; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <h1>Live Soundscape Logger (v3)</h1>
+
+  <div class="card">
+    <div class="note">
+      <div class="warn">Mic permissions only work on a secure page.</div>
+      Use <b>https://</b> (recommended) or <b>http://localhost</b>.
+      If you opened this from Google Drive / Downloads / <code>file://</code>, Chrome will often block the mic and you will NOT see the permission popup.
+      <br><br>
+      Best options:
+      <ol>
+        <li>Host on <b>GitHub Pages</b> (https) and open the page URL on your phone.</li>
+        <li>Or open on a laptop with <code>python -m http.server</code> and access via localhost.</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="grid" style="margin-top:12px">
+    <div class="card">
+      <h3>Controls</h3>
+      <div class="row">
+        Log interval (seconds):
+        <input id="interval" type="number" value="30" min="5" step="5" style="width:100px" />
+      </div>
+      <div class="row">
+        Weighting:
+        <select id="weighting">
+          <option value="Z">Z (unweighted)</option>
+          <option value="A">A-weighting (approx)</option>
+        </select>
+      </div>
+      <div class="row">
+        <button id="start">Start</button>
+        <button id="stop" disabled>Stop</button>
+        <button id="export" disabled>Export CSV</button>
+      </div>
+      <div class="row">
+        <button id="calStart" disabled>Calibrate (start 5s)</button>
+        <button id="calApply" disabled>Apply calibration</button>
+      </div>
+      <div class="row">
+        Meter reading during calibration:
+        <input id="calDb" type="number" value="65" step="0.1" style="width:100px" />
+      </div>
+      <div class="note">
+        If Start does nothing: check Chrome site permissions:
+        <b>Chrome → ⋮ → Settings → Site settings → Microphone</b> and ensure it’s allowed for this site.
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Live</h3>
+      <div class="row">Live level: <b id="level">—</b> <span class="note" id="levelUnit"></span></div>
+      <div class="meter"><div id="bar" class="bar"></div></div>
+      <div class="row note">Calibration offset: <b id="offset">0.0</b> dB</div>
+      <div class="row note" id="status"></div>
+      <div class="row note" id="debug"></div>
+    </div>
+  </div>
+
+  <h2 style="margin-top:16px">Log (latest 12 rows)</h2>
+  <div id="tableWrap"></div>
+
+<script>
+(() => {
+  let audioCtx, analyser, micStream, sourceNode, weightNode;
+  let rafId = null;
+  let logTimer = null;
+
+  let sumSquares = 0;
+  let sampleCount = 0;
+  let maxDb = -Infinity;
+
+  let calActive = false;
+  let calSumSquares = 0;
+  let calCount = 0;
+  let calTimer = null;
+
+  let calibOffsetDb = 0.0;
+  let hasCalibration = false;
+
+  const logs = [];
+  const el = (id) => document.getElementById(id);
+
+  function setStatus(msg) { el("status").textContent = msg || ""; }
+  function setDebug(msg) { el("debug").textContent = msg || ""; }
+
+  function isSecureOk() {
+    const proto = location.protocol;
+    const host = location.hostname;
+    return (proto === "https:" || host === "localhost" || host === "127.0.0.1");
+  }
+
+  function dbFromRms(rms) { return 20 * Math.log10(rms + 1e-12); }
+  function currentUnit() { return hasCalibration ? "dB(A) approx" : "dBFS proxy"; }
+  function displayDb(dbfs) { return hasCalibration ? (dbfs + calibOffsetDb) : dbfs; }
+
+  function renderTable() {
+    const recent = logs.slice(-12).reverse();
+    if (!recent.length) { el("tableWrap").innerHTML = "<i>No data yet.</i>"; return; }
+    const rows = recent.map(r => `
+      <tr>
+        <td>${r.time}</td>
+        <td>${r.interval_s}</td>
+        <td>${r.weighting}</td>
+        <td>${r.laeq.toFixed(1)}</td>
+        <td>${r.lafmax.toFixed(1)}</td>
+        <td>${r.unit}</td>
+      </tr>
+    `).join("");
+    el("tableWrap").innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Time (ISO)</th><th>Interval (s)</th><th>W</th><th>LAeq</th><th>LAFmax</th><th>Unit</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  function exportCsv() {
+    const header = ["time","interval_s","weighting","laeq","lafmax","unit","calib_offset_db"];
+    const lines = [header.join(",")];
+    for (const r of logs) {
+      lines.push([r.time, r.interval_s, r.weighting, r.laeq.toFixed(3), r.lafmax.toFixed(3), r.unit, (hasCalibration?calibOffsetDb.toFixed(3):"")].join(","));
+    }
+    const blob = new Blob([lines.join("\\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `soundscape_log_${new Date().toISOString().replaceAll(":","-")}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function resetIntervalStats() { sumSquares = 0; sampleCount = 0; maxDb = -Infinity; }
+
+  function createAWeightingChain(ctx, inputNode) {
+    const sr = ctx.sampleRate;
+    const use48 = Math.abs(sr - 48000) <= Math.abs(sr - 44100);
+
+    const A_48K = [
+      {b:[0.25574113, -0.51148225, 0.25574113], a:[1.0, -0.64776835, 0.16999495]},
+      {b:[1.0, -2.0, 1.0], a:[1.0, -1.99004745, 0.99007225]},
+      {b:[1.0, 2.0, 1.0], a:[1.0, -1.99004745, 0.99007225]}
+    ];
+    const A_44K = [
+      {b:[0.25574113, -0.51148225, 0.25574113], a:[1.0, -0.63078472, 0.15463930]},
+      {b:[1.0, -2.0, 1.0], a:[1.0, -1.98902800, 0.98905500]},
+      {b:[1.0, 2.0, 1.0], a:[1.0, -1.98902800, 0.98905500]}
+    ];
+    const coeffs = use48 ? A_48K : A_44K;
+
+    let node = inputNode;
+    if (typeof IIRFilterNode !== "undefined") {
+      for (const c of coeffs) {
+        const iir = new IIRFilterNode(ctx, {feedforward: c.b, feedback: c.a});
+        node.connect(iir);
+        node = iir;
+      }
+      return node;
+    }
+    return inputNode;
+  }
+
+  function tick() {
+    const buf = new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(buf);
+
+    let ss = 0;
+    for (let i = 0; i < buf.length; i++) ss += buf[i] * buf[i];
+    const rms = Math.sqrt(ss / buf.length);
+    const dbfs = dbFromRms(rms);
+    const dbDisp = displayDb(dbfs);
+
+    el("level").textContent = dbDisp.toFixed(1);
+    el("levelUnit").textContent = `(${currentUnit()})`;
+    const pct = Math.max(0, Math.min(100, (dbfs + 80) * 1.25));
+    el("bar").style.width = pct + "%";
+
+    sumSquares += (rms * rms);
+    sampleCount += 1;
+    if (dbDisp > maxDb) maxDb = dbDisp;
+
+    if (calActive) { calSumSquares += (rms * rms); calCount += 1; }
+
+    rafId = requestAnimationFrame(tick);
+  }
+
+  function flushInterval(intervalSeconds) {
+    const meanSquare = (sampleCount > 0) ? (sumSquares / sampleCount) : 0;
+    const laeq_dbfs = dbFromRms(Math.sqrt(meanSquare));
+    const laeq = displayDb(laeq_dbfs);
+
+    logs.push({
+      time: new Date().toISOString(),
+      interval_s: intervalSeconds,
+      weighting: el("weighting").value,
+      laeq: laeq,
+      lafmax: maxDb,
+      unit: currentUnit()
+    });
+
+    renderTable();
+    resetIntervalStats();
+  }
+
+  async function start() {
+    setDebug("");
+    if (!isSecureOk()) {
+      setStatus("Not a secure context. Open this page via https:// or http://localhost. Mic will be blocked on file:// and many previews.");
+      alert("Microphone is blocked because this page is not https:// (secure). Host it (GitHub Pages) and open the https URL.");
+      return;
+    }
+
+    const intervalSeconds = parseInt(el("interval").value, 10) || 30;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+      });
+    } catch (e) {
+      const msg = (e && e.name) ? `${e.name}: ${e.message || ""}` : String(e);
+      setStatus("getUserMedia failed: " + msg);
+      alert("Microphone permission failed.\n\n" + msg + "\n\nCheck: Chrome site permissions → Microphone → Allow.");
+      return;
+    }
+
+    sourceNode = audioCtx.createMediaStreamSource(micStream);
+
+    const w = el("weighting").value;
+    weightNode = (w === "A") ? createAWeightingChain(audioCtx, sourceNode) : sourceNode;
+
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    weightNode.connect(analyser);
+
+    resetIntervalStats();
+    setStatus("Running.");
+    setDebug(`AudioContext sampleRate=${audioCtx.sampleRate}Hz, weighting=${w}`);
+
+    el("calStart").disabled = false;
+    el("calApply").disabled = false;
+
+    tick();
+    logTimer = setInterval(() => flushInterval(intervalSeconds), intervalSeconds * 1000);
+
+    el("start").disabled = true;
+    el("stop").disabled = false;
+    el("export").disabled = false;
+  }
+
+  function stop() {
+    if (logTimer) clearInterval(logTimer);
+    logTimer = null;
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+
+    if (calTimer) clearTimeout(calTimer);
+    calTimer = null;
+    calActive = false;
+
+    if (micStream) micStream.getTracks().forEach(t => t.stop());
+    micStream = null;
+
+    if (audioCtx) audioCtx.close();
+    audioCtx = null;
+
+    el("start").disabled = false;
+    el("stop").disabled = true;
+    el("calStart").disabled = true;
+    el("calApply").disabled = true;
+
+    setStatus("Stopped.");
+    setDebug("");
+  }
+
+  function calStart() {
+    if (!audioCtx) { setStatus("Start logging first, then calibrate."); return; }
+    calActive = true;
+    calSumSquares = 0;
+    calCount = 0;
+    setStatus("Calibration running (5 seconds)… keep the meter steady.");
+    if (calTimer) clearTimeout(calTimer);
+    calTimer = setTimeout(() => {
+      calActive = false;
+      setStatus("Calibration capture complete. Enter meter reading and click 'Apply calibration'.");
+    }, 5000);
+  }
+
+  function calApply() {
+    if (calCount <= 0) { setStatus("No calibration data captured. Click 'Calibrate (start 5s)' first."); return; }
+    const meanSquare = calSumSquares / calCount;
+    const cal_dbfs = dbFromRms(Math.sqrt(meanSquare));
+    const target = parseFloat(el("calDb").value);
+    if (!isFinite(target)) { setStatus("Enter a valid meter reading (e.g. 65.0)."); return; }
+    calibOffsetDb = target - cal_dbfs;
+    hasCalibration = true;
+    el("offset").textContent = calibOffsetDb.toFixed(1);
+    setStatus("Calibration applied.");
+  }
+
+  el("start").addEventListener("click", start);
+  el("stop").addEventListener("click", stop);
+  el("export").addEventListener("click", exportCsv);
+  el("calStart").addEventListener("click", calStart);
+  el("calApply").addEventListener("click", calApply);
+
+  el("weighting").addEventListener("change", () => {
+    if (audioCtx) setStatus("Weighting changed. Stop and Start again to apply the new weighting.");
+  });
+
+  renderTable();
+})();
+</script>
+</body>
+</html>
