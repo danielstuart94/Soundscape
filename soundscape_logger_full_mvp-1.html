@@ -1,0 +1,656 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Soundscape Logger (Full MVP)</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 16px; max-width: 1020px; }
+    .row { margin: 10px 0; }
+    button { padding: 12px 14px; margin: 6px 6px 0 0; font-size: 15px; }
+    input, select { padding: 8px; font-size: 15px; }
+    .meter { height: 16px; background: #eee; border: 1px solid #ccc; border-radius: 6px; overflow: hidden; }
+    .bar { height: 100%; width: 0%; background: #333; }
+    .note { font-size: 12px; color: #555; line-height: 1.35; }
+    .card { border:1px solid #ddd; padding: 12px; border-radius: 10px; }
+    .grid { display:grid; grid-template-columns: 1fr; gap: 12px; }
+    @media (min-width: 920px){ .grid { grid-template-columns: 1fr 1fr; } }
+    table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    th, td { border: 1px solid #ddd; padding: 6px; }
+    th { background: #f3f3f3; text-align: left; }
+    .pill { display:inline-block; padding:2px 8px; border:1px solid #ddd; border-radius:999px; margin-left:6px; font-size:12px; }
+    .warn { color:#8a0000; font-weight:700; }
+    .ok { color:#0b6b2b; font-weight:700; }
+  </style>
+</head>
+<body>
+  <h2>Soundscape Logger (Full MVP)</h2>
+  <div class="note">
+    Logs: <b>LAeq proxy</b>, <b>LAFmax proxy</b>, centroid/flatness/band ratios, basic Pleasantness/Eventfulness, rule-based “top sounds”, optional manual tags, plus calibration offset.
+    <b>Not a standards-compliant SLM</b>. Use for indicative soundscape work / product demo.
+  </div>
+
+  <div class="grid" style="margin-top:12px">
+    <div class="card">
+      <h3>Controls</h3>
+
+      <div class="row">
+        Log interval (seconds):
+        <input id="interval" type="number" value="30" min="5" step="5" style="width:95px" />
+      </div>
+
+      <div class="row">
+        Weighting:
+        <select id="weighting">
+          <option value="Z">Z (unweighted)</option>
+          <option value="A">A-weighting (approx)</option>
+        </select>
+        <span class="note">Change requires Stop/Start.</span>
+      </div>
+
+      <div class="row">
+        <button id="start">Start</button>
+        <button id="stop" disabled>Stop</button>
+        <button id="export" disabled>Export CSV</button>
+      </div>
+
+      <h4 style="margin:14px 0 6px">Calibration (optional)</h4>
+      <div class="note">
+        1) Start logging. 2) Hold XL2 reading steady. 3) Tap Calibrate (5s). 4) Enter XL2 reading and Apply.
+      </div>
+      <div class="row">
+        <button id="calStart" disabled>Calibrate (5s)</button>
+        <button id="calApply" disabled>Apply Cal</button>
+        Meter reading:
+        <input id="calDb" type="number" value="65.0" step="0.1" style="width:95px" />
+      </div>
+      <div class="row note">
+        Offset: <b id="offset">0.0</b> dB &nbsp;&nbsp; <span class="pill" id="unit">dBFS proxy</span>
+      </div>
+
+      <h4 style="margin:14px 0 6px">Manual tags (optional)</h4>
+      <div class="note">Tap when you hear a distinct source. Counts stored per logging interval.</div>
+      <div class="row" id="tagButtons"></div>
+
+      <div class="row note warn" id="secureNote" style="display:none">
+        Microphone requires HTTPS (or localhost). Open via your GitHub Pages URL.
+      </div>
+
+      <div class="row note" id="status"></div>
+      <div class="row note" id="debug"></div>
+    </div>
+
+    <div class="card">
+      <h3>Live (updates ~1s)</h3>
+
+      <div class="row">
+        Level: <b id="level">—</b> <span class="pill" id="liveUnit">dBFS proxy</span>
+      </div>
+      <div class="meter"><div id="bar" class="bar"></div></div>
+
+      <div class="row">Centroid: <b id="centroid">—</b> Hz</div>
+      <div class="row">Flatness: <b id="flatness">—</b></div>
+      <div class="row">
+        Low% (&lt;200 Hz): <b id="lowpct">—</b> &nbsp;&nbsp; High% (&gt;2 kHz): <b id="hipct">—</b>
+      </div>
+
+      <div class="row">
+        Pleasantness: <b id="pleasant">—</b>/100 &nbsp;&nbsp; Eventfulness: <b id="eventful">—</b>/100
+        <span class="pill" id="quad">—</span>
+      </div>
+
+      <div class="row note">
+        Top “sound” guesses (rule-based): <b id="topsounds">—</b>
+      </div>
+
+      <div class="note">
+        The meter is intentionally smoothed (slower). Logged LAeq is interval-averaged; LAFmax is the peak within interval.
+      </div>
+    </div>
+  </div>
+
+  <h3 style="margin-top:14px">Log (latest 10 rows)</h3>
+  <div id="tableWrap"></div>
+
+<script>
+(() => {
+  // ---------- secure context check ----------
+  function secureOk() {
+    const p = location.protocol, h = location.hostname;
+    return (p === "https:" || h === "localhost" || h === "127.0.0.1");
+  }
+
+  // ---------- UI helpers ----------
+  const el = (id) => document.getElementById(id);
+  function setStatus(msg){ el("status").textContent = msg || ""; }
+  function setDebug(msg){ el("debug").textContent = msg || ""; }
+
+  // ---------- Manual tags ----------
+  const TAGS = ["Traffic","Voices","Birds","Wind","Water","Music","Siren","Construction","Other"];
+  let tagCounts = {};
+  function resetTags(){ tagCounts = Object.fromEntries(TAGS.map(t => [t,0])); }
+  resetTags();
+
+  const tagWrap = el("tagButtons");
+  TAGS.forEach(t => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = t;
+    b.addEventListener("click", () => { tagCounts[t]++; });
+    tagWrap.appendChild(b);
+  });
+
+  // ---------- Audio graph ----------
+  let audioCtx = null;
+  let micStream = null;
+  let sourceNode = null;
+  let weightNode = null;
+  let analyserTD = null;
+  let analyserFFT = null;
+
+  let rafId = null;
+  let logTimer = null;
+  let liveUiTimer = null;
+  let isRunning = false;
+
+  // interval accumulation
+  let sumSquares = 0;
+  let sampleCount = 0;
+  let maxDbInterval = -Infinity;
+
+  // instantaneous computed (from audio frames)
+  let instDb = -80;
+
+  // descriptors (smoothed)
+  let lastCentroid = 0;
+  let lastFlatness = 0;
+  let lastLowPct = 0;
+  let lastHiPct = 0;
+
+  // display smoothing (slow meter)
+  let displayDb = -80;
+
+  // calibration
+  let hasCalibration = false;
+  let calibOffsetDb = 0.0;
+  let calActive = false;
+  let calSumSquares = 0;
+  let calCount = 0;
+
+  const logs = [];
+
+  function dbFromRms(rms){ return 20 * Math.log10(rms + 1e-12); }
+  function currentUnit(){ return hasCalibration ? "dB(A) approx" : "dBFS proxy"; }
+  function applyCal(db){ return hasCalibration ? (db + calibOffsetDb) : db; }
+
+  // ---------- A-weighting approximation (optional) ----------
+  function createAWeightingChain(ctx, inputNode){
+    const sr = ctx.sampleRate;
+    const use48 = Math.abs(sr - 48000) <= Math.abs(sr - 44100);
+    const A_48K = [
+      {b:[0.25574113, -0.51148225, 0.25574113], a:[1.0, -0.64776835, 0.16999495]},
+      {b:[1.0, -2.0, 1.0], a:[1.0, -1.99004745, 0.99007225]},
+      {b:[1.0, 2.0, 1.0], a:[1.0, -1.99004745, 0.99007225]}
+    ];
+    const A_44K = [
+      {b:[0.25574113, -0.51148225, 0.25574113], a:[1.0, -0.63078472, 0.15463930]},
+      {b:[1.0, -2.0, 1.0], a:[1.0, -1.98902800, 0.98905500]},
+      {b:[1.0, 2.0, 1.0], a:[1.0, -1.98902800, 0.98905500]}
+    ];
+    const coeffs = use48 ? A_48K : A_44K;
+
+    let node = inputNode;
+    if (typeof IIRFilterNode !== "undefined") {
+      for (const c of coeffs) {
+        const iir = new IIRFilterNode(ctx, {feedforward: c.b, feedback: c.a});
+        node.connect(iir);
+        node = iir;
+      }
+    }
+    return node;
+  }
+
+  // ---------- Quadrant ----------
+  function quadrant(p,e){
+    if (p >= 50 && e < 50) return "Calm";
+    if (p >= 50 && e >= 50) return "Vibrant";
+    if (p < 50 && e >= 50) return "Chaotic";
+    return "Monotonous";
+  }
+
+  // ---------- Rule-based top sounds guesser (demo only) ----------
+  function guessTopSounds(levelDb, centroidHz, flatness, lowPct, hiPct, tags){
+    let sTraffic = 0, sVoices = 0, sBirds = 0, sWind = 0, sWater = 0, sSiren = 0, sMusic = 0, sConstr = 0;
+
+    sTraffic += (lowPct * 2.0) + Math.max(0, (levelDb + 60) / 20);
+    if (centroidHz > 400 && centroidHz < 2000) sVoices += 1.0;
+    sVoices += (hiPct * 0.8);
+    sBirds += (hiPct * 1.8) + (centroidHz > 2500 ? 0.8 : 0);
+    sWind += (flatness * 2.0) + (centroidHz < 1200 ? 0.3 : 0);
+    sWater += (flatness * 1.2) + (centroidHz > 1000 && centroidHz < 3500 ? 0.6 : 0);
+    sSiren += (centroidHz > 1500 ? 0.7 : 0) + (flatness < 0.25 ? 0.7 : 0);
+    sMusic += (centroidHz > 800 && centroidHz < 4000 ? 0.6 : 0) + (flatness < 0.35 ? 0.4 : 0);
+    sConstr += Math.max(0, (levelDb + 55) / 15) + (centroidHz > 700 && centroidHz < 3000 ? 0.3 : 0);
+
+    const boost = (name) => (tags[name] || 0) * 0.8;
+    sTraffic += boost("Traffic");
+    sVoices  += boost("Voices");
+    sBirds   += boost("Birds");
+    sWind    += boost("Wind");
+    sWater   += boost("Water");
+    sMusic   += boost("Music");
+    sSiren   += boost("Siren");
+    sConstr  += boost("Construction");
+
+    const items = [
+      ["Traffic/Mechanical", sTraffic],
+      ["Voices", sVoices],
+      ["Birds", sBirds],
+      ["Wind/Rain", sWind],
+      ["Water", sWater],
+      ["Siren/Alarm", sSiren],
+      ["Music", sMusic],
+      ["Construction", sConstr]
+    ].filter(x => x[1] > 0.01);
+
+    items.sort((a,b)=>b[1]-a[1]);
+    const top = items.slice(0,5);
+    const sum = top.reduce((acc,x)=>acc+x[1],0) || 1;
+    return top.map(([k,v]) => [k, (v/sum)*100]);
+  }
+
+  // ---------- Pleasantness/Eventfulness proxies ----------
+  function scorePE(topSounds){
+    let nat = 0, mech = 0, alarm = 0, active = 0;
+    for (const [lab,pct] of topSounds){
+      const l = lab.toLowerCase();
+      if (l.includes("bird") || l.includes("wind") || l.includes("water")) nat += pct;
+      if (l.includes("traffic") || l.includes("mechanical")) mech += pct;
+      if (l.includes("siren") || l.includes("alarm")) alarm += pct;
+      if (l.includes("voices") || l.includes("music") || l.includes("construction") || l.includes("siren")) active += pct;
+    }
+    let pleasant = 50 + 0.5*nat - 0.4*mech - 0.9*alarm;
+    let eventful = 40 + 0.6*active + 0.2*mech + 0.6*alarm;
+    pleasant = Math.max(0, Math.min(100, Math.round(pleasant)));
+    eventful = Math.max(0, Math.min(100, Math.round(eventful)));
+    return {pleasant, eventful, quad: quadrant(pleasant, eventful)};
+  }
+
+  // ---------- Table rendering ----------
+  function renderTable(){
+    const recent = logs.slice(-10).reverse();
+    if (!recent.length){ el("tableWrap").innerHTML = "<i>No data yet.</i>"; return; }
+    const rows = recent.map(r => `
+      <tr>
+        <td>${r.time}</td>
+        <td>${r.interval_s}</td>
+        <td>${r.weighting}</td>
+        <td>${r.unit}</td>
+        <td>${r.laeq.toFixed(1)}</td>
+        <td>${r.lafmax.toFixed(1)}</td>
+        <td>${r.centroid.toFixed(0)}</td>
+        <td>${r.flatness.toFixed(3)}</td>
+        <td>${(r.low_pct*100).toFixed(0)}</td>
+        <td>${(r.hi_pct*100).toFixed(0)}</td>
+        <td>${r.pleasant}</td>
+        <td>${r.eventful}</td>
+        <td>${r.quad}</td>
+      </tr>
+    `).join("");
+    el("tableWrap").innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th><th>Int(s)</th><th>W</th><th>Unit</th><th>LAeq</th><th>LAFmax</th>
+            <th>Centroid</th><th>Flat</th><th>Low%</th><th>High%</th><th>P</th><th>E</th><th>Quad</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  // ---------- CSV export ----------
+  function exportCsv(){
+    const header = [
+      "time","interval_s","weighting","unit","calib_offset_db",
+      "laeq","lafmax","centroid_hz","flatness","low_pct","hi_pct",
+      "pleasantness","eventfulness","quadrant",
+      "top1_label","top1_pct","top2_label","top2_pct","top3_label","top3_pct","top4_label","top4_pct","top5_label","top5_pct",
+      ...TAGS.map(t => `tag_${t}`)
+    ];
+    const lines = [header.join(",")];
+
+    for (const r of logs){
+      const tops = r.top_sounds || [];
+      const topCols = [];
+      for (let i=0;i<5;i++){
+        if (tops[i]){
+          topCols.push(`"${tops[i][0].replaceAll('"','""')}"`, tops[i][1].toFixed(1));
+        } else {
+          topCols.push("", "");
+        }
+      }
+      const tagCols = TAGS.map(t => (r.tags && (t in r.tags)) ? r.tags[t] : 0);
+      lines.push([
+        r.time, r.interval_s, r.weighting, r.unit, r.calib_offset_db.toFixed(3),
+        r.laeq.toFixed(3), r.lafmax.toFixed(3),
+        r.centroid.toFixed(3), r.flatness.toFixed(6),
+        r.low_pct.toFixed(6), r.hi_pct.toFixed(6),
+        r.pleasant, r.eventful, r.quad,
+        ...topCols,
+        ...tagCols
+      ].join(","));
+    }
+
+    const blob = new Blob([lines.join("\n")], {type:"text/csv"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `soundscape_log_${new Date().toISOString().replaceAll(":","-")}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function resetInterval(){
+    sumSquares = 0;
+    sampleCount = 0;
+    maxDbInterval = -Infinity;
+    resetTags();
+  }
+
+  // ---------- audio processing tick ----------
+  function tick(){
+    if (!isRunning) return;
+
+    const td = new Float32Array(analyserTD.fftSize);
+    analyserTD.getFloatTimeDomainData(td);
+    let ss = 0;
+    for (let i=0;i<td.length;i++) ss += td[i]*td[i];
+    const rms = Math.sqrt(ss / td.length);
+    const dbRaw = dbFromRms(rms);
+    instDb = applyCal(dbRaw);
+
+    // FFT descriptors
+    const f = new Float32Array(analyserFFT.frequencyBinCount);
+    analyserFFT.getFloatFrequencyData(f); // dB bins
+    const mag = new Float32Array(f.length);
+    for (let i=0;i<f.length;i++) mag[i] = Math.pow(10, f[i]/20);
+
+    const nyq = audioCtx.sampleRate / 2;
+    const binHz = nyq / mag.length;
+
+    // centroid
+    let num=0, den=0;
+    for (let i=0;i<mag.length;i++){
+      const hz = i * binHz;
+      num += hz * mag[i];
+      den += mag[i];
+    }
+    const centroid = den > 0 ? (num/den) : 0;
+
+    // flatness
+    let logSum = 0, arMean = 0;
+    for (let i=0;i<mag.length;i++){
+      const v = mag[i] + 1e-12;
+      logSum += Math.log(v);
+      arMean += v;
+    }
+    const geoMean = Math.exp(logSum / mag.length);
+    arMean = arMean / mag.length;
+    const flatness = arMean > 0 ? (geoMean / arMean) : 0;
+
+    // low/high proportions
+    let low=0, hi=0, tot=0;
+    for (let i=0;i<mag.length;i++){
+      const hz = i * binHz;
+      const v = mag[i];
+      tot += v;
+      if (hz < 200) low += v;
+      if (hz > 2000) hi += v;
+    }
+    const lowPct = tot>0 ? (low/tot) : 0;
+    const hiPct  = tot>0 ? (hi/tot) : 0;
+
+    // descriptor smoothing
+    const a = 0.15;
+    lastCentroid = lastCentroid*(1-a) + centroid*a;
+    lastFlatness = lastFlatness*(1-a) + flatness*a;
+    lastLowPct   = lastLowPct*(1-a) + lowPct*a;
+    lastHiPct    = lastHiPct*(1-a) + hiPct*a;
+
+    // LAeq accumulation (using raw RMS^2)
+    sumSquares += rms*rms;
+    sampleCount += 1;
+    if (instDb > maxDbInterval) maxDbInterval = instDb;
+
+    // calibration accumulation (raw RMS^2)
+    if (calActive){
+      calSumSquares += rms*rms;
+      calCount += 1;
+    }
+
+    rafId = requestAnimationFrame(tick);
+  }
+
+  // ---------- slow UI update (~1s) ----------
+  function updateLiveUI(){
+    if (!isRunning) return;
+
+    const alpha = 0.18;
+    displayDb = displayDb*(1-alpha) + instDb*alpha;
+
+    el("level").textContent = displayDb.toFixed(1);
+    el("liveUnit").textContent = currentUnit();
+    el("unit").textContent = currentUnit();
+
+    const pct = Math.max(0, Math.min(100, (displayDb + 80) * 1.25));
+    el("bar").style.width = pct + "%";
+
+    el("centroid").textContent = lastCentroid.toFixed(0);
+    el("flatness").textContent = lastFlatness.toFixed(3);
+    el("lowpct").textContent = (lastLowPct*100).toFixed(0) + "%";
+    el("hipct").textContent = (lastHiPct*100).toFixed(0) + "%";
+
+    const top = guessTopSounds(displayDb, lastCentroid, lastFlatness, lastLowPct, lastHiPct, tagCounts);
+    const pe = scorePE(top);
+
+    el("pleasant").textContent = pe.pleasant;
+    el("eventful").textContent = pe.eventful;
+    el("quad").textContent = pe.quad;
+
+    el("topsounds").textContent = top.slice(0,3).map(x => `${x[0]} ${x[1].toFixed(0)}%`).join(" | ");
+  }
+
+  // ---------- flush logging interval ----------
+  function flushInterval(){
+    const intervalSeconds = parseInt(el("interval").value,10) || 30;
+    const meanSq = sampleCount > 0 ? (sumSquares / sampleCount) : 0;
+    const laeqRaw = dbFromRms(Math.sqrt(meanSq));
+    const laeq = applyCal(laeqRaw);
+
+    const top = guessTopSounds(laeq, lastCentroid, lastFlatness, lastLowPct, lastHiPct, tagCounts);
+    const pe = scorePE(top);
+
+    logs.push({
+      time: new Date().toISOString(),
+      interval_s: intervalSeconds,
+      weighting: el("weighting").value,
+      unit: currentUnit(),
+      calib_offset_db: calibOffsetDb,
+      laeq: laeq,
+      lafmax: maxDbInterval,
+      centroid: lastCentroid,
+      flatness: lastFlatness,
+      low_pct: lastLowPct,
+      hi_pct: lastHiPct,
+      pleasant: pe.pleasant,
+      eventful: pe.eventful,
+      quad: pe.quad,
+      top_sounds: top,
+      tags: {...tagCounts}
+    });
+
+    renderTable();
+    resetInterval();
+  }
+
+  // ---------- calibration ----------
+  function startCalibration(){
+    if (!isRunning){ setStatus("Start logging first, then calibrate."); return; }
+    calActive = true;
+    calSumSquares = 0;
+    calCount = 0;
+    setStatus("Calibrating for 5 seconds… hold XL2 steady.");
+
+    setTimeout(() => {
+      calActive = false;
+      setStatus("Calibration capture complete. Enter XL2 reading and tap Apply Cal.");
+    }, 5000);
+  }
+
+  function applyCalibration(){
+    if (calCount <= 0){ setStatus("No calibration data. Tap Calibrate (5s) first."); return; }
+
+    const meanSq = calSumSquares / calCount;
+    const cal_dbfs = dbFromRms(Math.sqrt(meanSq));
+    const target = parseFloat(el("calDb").value);
+
+    if (!isFinite(target)){ setStatus("Enter a valid meter reading (e.g. 65.0)."); return; }
+
+    calibOffsetDb = target - cal_dbfs;
+    hasCalibration = true;
+
+    el("offset").textContent = calibOffsetDb.toFixed(1);
+    setStatus("Calibration applied.");
+  }
+
+  // ---------- stop cleanup ----------
+  function stopAll(){
+    isRunning = false;
+
+    if (logTimer) clearInterval(logTimer);
+    logTimer = null;
+
+    if (liveUiTimer) clearInterval(liveUiTimer);
+    liveUiTimer = null;
+
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+
+    if (micStream) {
+      micStream.getTracks().forEach(t => t.stop());
+      micStream = null;
+    }
+
+    if (audioCtx) {
+      audioCtx.close().catch(()=>{});
+      audioCtx = null;
+    }
+
+    sourceNode = null;
+    weightNode = null;
+    analyserTD = null;
+    analyserFFT = null;
+
+    el("start").disabled = false;
+    el("stop").disabled = true;
+    el("export").disabled = logs.length === 0;
+    el("calStart").disabled = true;
+    el("calApply").disabled = true;
+
+    setStatus("Stopped.");
+    setDebug("");
+  }
+
+  // ---------- start ----------
+  async function startAll(){
+    if (isRunning) return;
+
+    if (!secureOk()){
+      el("secureNote").style.display = "block";
+      setStatus("Not secure context. Use HTTPS (GitHub Pages).");
+      alert("Microphone requires HTTPS (or localhost). Open via your GitHub Pages https:// URL.");
+      return;
+    }
+    el("secureNote").style.display = "none";
+
+    // basic feature detection
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      setStatus("getUserMedia not supported in this browser.");
+      alert("This browser does not support microphone capture. Use Chrome on Android.");
+      return;
+    }
+
+    try {
+      setStatus("Requesting microphone permission…");
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation:false, noiseSuppression:false, autoGainControl:false }
+      });
+
+      sourceNode = audioCtx.createMediaStreamSource(micStream);
+
+      const w = el("weighting").value;
+      weightNode = (w === "A") ? createAWeightingChain(audioCtx, sourceNode) : sourceNode;
+
+      analyserTD = audioCtx.createAnalyser();
+      analyserTD.fftSize = 2048;
+
+      analyserFFT = audioCtx.createAnalyser();
+      analyserFFT.fftSize = 2048;
+
+      weightNode.connect(analyserTD);
+      weightNode.connect(analyserFFT);
+
+      resetInterval();
+      displayDb = -80;
+      instDb = -80;
+      lastCentroid = 0; lastFlatness = 0; lastLowPct = 0; lastHiPct = 0;
+
+      isRunning = true;
+
+      // enable buttons
+      el("start").disabled = true;
+      el("stop").disabled = false;
+      el("export").disabled = logs.length === 0;
+      el("calStart").disabled = false;
+      el("calApply").disabled = false;
+
+      setStatus("Running.");
+      setDebug(`sampleRate=${audioCtx.sampleRate}Hz, weighting=${w}`);
+
+      // start loops
+      tick();
+      liveUiTimer = setInterval(updateLiveUI, 1000);
+
+      const intervalSeconds = parseInt(el("interval").value,10) || 30;
+      logTimer = setInterval(flushInterval, intervalSeconds * 1000);
+
+    } catch (e) {
+      const msg = (e && e.name) ? `${e.name}: ${e.message || ""}` : String(e);
+      setStatus("Mic failed: " + msg);
+      alert("Microphone permission failed.\n\n" + msg + "\n\nFix:\n- Tap padlock → Permissions → Microphone → Allow\n- Reload page");
+      stopAll();
+    }
+  }
+
+  // ---------- attach handlers (robust) ----------
+  el("start").onclick = () => startAll();
+  el("stop").onclick = () => stopAll();
+  el("export").onclick = () => exportCsv();
+  el("calStart").onclick = () => startCalibration();
+  el("calApply").onclick = () => applyCalibration();
+
+  el("weighting").addEventListener("change", () => {
+    if (isRunning) setStatus("Weighting changed. Stop and Start again to apply.");
+  });
+
+  // initial UI state
+  if (!secureOk()) el("secureNote").style.display = "block";
+  renderTable();
+})();
+</script>
+</body>
+</html>
