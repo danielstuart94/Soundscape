@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Live Soundscape Logger (MVP + Soundscape)</title>
+  <title>Live Soundscape Logger (MVP + Soundscape + Calibration)</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 16px; max-width: 980px; }
     .row { margin: 10px 0; }
@@ -19,22 +19,25 @@
     th, td { border: 1px solid #ddd; padding: 6px; }
     th { background: #f3f3f3; text-align: left; }
     .pill { display:inline-block; padding:2px 8px; border:1px solid #ddd; border-radius:999px; margin-left:6px; font-size:12px; }
+    .warn { color:#8a0000; font-weight:700; }
   </style>
 </head>
 <body>
   <h2>Live Soundscape Logger (MVP)</h2>
   <div class="note">
-    This is a <b>prototype</b> soundscape logger: it records basic acoustic descriptors + very simple pleasantness/eventfulness proxies.
-    “Top sounds” are rule-based guesses (not ML). For real classification you’d add ML later.
+    Logs: <b>LAeq proxy</b>, <b>LAFmax proxy</b>, centroid/flatness/band ratios, basic Pleasantness/Eventfulness, optional manual tags.
+    Calibration provides <b>approx</b> dB(A)/dB via an offset. Not a standards-compliant SLM.
   </div>
 
   <div class="grid" style="margin-top:12px">
     <div class="card">
       <h3>Controls</h3>
+
       <div class="row">
         Log interval (seconds):
         <input id="interval" type="number" value="30" min="5" step="5" style="width:95px" />
       </div>
+
       <div class="row">
         Weighting:
         <select id="weighting">
@@ -42,31 +45,48 @@
           <option value="A">A-weighting (approx)</option>
         </select>
       </div>
+
       <div class="row">
         <button id="start">Start</button>
         <button id="stop" disabled>Stop</button>
         <button id="export" disabled>Export CSV</button>
       </div>
 
+      <h4 style="margin:14px 0 6px">Calibration (optional)</h4>
+      <div class="note">
+        1) Start logging. 2) Hold XL2 reading steady. 3) Tap Calibrate (5s). 4) Enter XL2 reading and Apply.
+      </div>
+      <div class="row">
+        <button id="calStart" disabled>Calibrate (5s)</button>
+        <button id="calApply" disabled>Apply Cal</button>
+        Meter reading:
+        <input id="calDb" type="number" value="65.0" step="0.1" style="width:95px" />
+      </div>
+      <div class="row note">
+        Offset: <b id="offset">0.0</b> dB
+      </div>
+
       <h4 style="margin:14px 0 6px">Manual tags (optional)</h4>
       <div class="note">Tap when you hear a distinct source. Counts are stored per logging interval.</div>
       <div class="row" id="tagButtons"></div>
+
+      <div class="row note warn" id="secureNote" style="display:none">
+        Microphone requires HTTPS (or localhost). Open this page via your GitHub Pages URL.
+      </div>
+
       <div class="row note" id="status"></div>
     </div>
 
     <div class="card">
-      <h3>Live</h3>
+      <h3>Live (updates ~1s)</h3>
+
       <div class="row">
         Level: <b id="level">—</b> <span class="pill" id="unit">dBFS proxy</span>
       </div>
       <div class="meter"><div id="bar" class="bar"></div></div>
 
-      <div class="row">
-        Centroid: <b id="centroid">—</b> Hz
-      </div>
-      <div class="row">
-        Flatness: <b id="flatness">—</b>
-      </div>
+      <div class="row">Centroid: <b id="centroid">—</b> Hz</div>
+      <div class="row">Flatness: <b id="flatness">—</b></div>
       <div class="row">
         Low% (&lt;200 Hz): <b id="lowpct">—</b> &nbsp;&nbsp; High% (&gt;2 kHz): <b id="hipct">—</b>
       </div>
@@ -79,6 +99,10 @@
       <div class="row note">
         Top “sound” guesses (rule-based): <b id="topsounds">—</b>
       </div>
+
+      <div class="note">
+        Meter is intentionally smoothed / slower. Logged LAeq uses interval averaging; LAFmax uses peak within interval.
+      </div>
     </div>
   </div>
 
@@ -87,19 +111,19 @@
 
 <script>
 (() => {
-  // ---- Secure context check (mic only works on https / localhost) ----
+  // ---------- secure context check ----------
   function secureOk() {
     const p = location.protocol, h = location.hostname;
     return (p === "https:" || h === "localhost" || h === "127.0.0.1");
   }
 
-  // ---- UI helpers ----
+  // ---------- UI helpers ----------
   const el = (id) => document.getElementById(id);
   function setStatus(msg){ el("status").textContent = msg || ""; }
 
-  // ---- Manual tagging ----
+  // ---------- Manual tags ----------
   const TAGS = ["Traffic","Voices","Birds","Wind","Water","Music","Siren","Construction","Other"];
-  let tagCounts = {}; // per-interval
+  let tagCounts = {};
   function resetTags(){ tagCounts = Object.fromEntries(TAGS.map(t => [t,0])); }
   resetTags();
 
@@ -111,27 +135,43 @@
     tagWrap.appendChild(b);
   });
 
-  // ---- Audio graph ----
+  // ---------- Audio graph ----------
   let audioCtx, micStream, sourceNode, weightNode, analyserTD, analyserFFT;
   let rafId = null;
   let logTimer = null;
+  let liveUiTimer = null;
 
   // interval accumulation
   let sumSquares = 0;
   let sampleCount = 0;
-  let maxDb = -Infinity;
+  let maxDbInterval = -Infinity;
 
-  // soundscape descriptors (smoothed)
+  // instantaneous computed (from audio frames)
+  let instDb = -80;
+
+  // descriptors (smoothed)
   let lastCentroid = 0;
   let lastFlatness = 0;
   let lastLowPct = 0;
   let lastHiPct = 0;
 
+  // display smoothing (slow meter)
+  let displayDb = -80;
+
+  // calibration
+  let hasCalibration = false;
+  let calibOffsetDb = 0.0;
+  let calActive = false;
+  let calSumSquares = 0;
+  let calCount = 0;
+
   const logs = [];
 
   function dbFromRms(rms){ return 20 * Math.log10(rms + 1e-12); }
+  function currentUnit(){ return hasCalibration ? "dB(A) approx" : "dBFS proxy"; }
+  function applyCal(db){ return hasCalibration ? (db + calibOffsetDb) : db; }
 
-  // A-weighting approximation via IIRFilterNode cascade (optional)
+  // ---------- A-weighting approximation (optional) ----------
   function createAWeightingChain(ctx, inputNode){
     const sr = ctx.sampleRate;
     const use48 = Math.abs(sr - 48000) <= Math.abs(sr - 44100);
@@ -158,6 +198,7 @@
     return node;
   }
 
+  // ---------- Quadrant ----------
   function quadrant(p,e){
     if (p >= 50 && e < 50) return "Calm";
     if (p >= 50 && e >= 50) return "Vibrant";
@@ -165,29 +206,36 @@
     return "Monotonous";
   }
 
-  // Very basic “top sounds” guesser (rule-based, not ML)
+  // ---------- Rule-based top sounds guesser (demo only) ----------
   function guessTopSounds(levelDb, centroidHz, flatness, lowPct, hiPct, tags){
-    // Scores are arbitrary, for UI demo only
     let sTraffic = 0, sVoices = 0, sBirds = 0, sWind = 0, sWater = 0, sSiren = 0, sMusic = 0, sConstr = 0;
-    // low freq + louder -> traffic/mech
+
+    // traffic/mechanical: low band + louder
     sTraffic += (lowPct * 2.0) + Math.max(0, (levelDb + 60) / 20);
-    // centroid mid + some high -> voices
+
+    // voices: mid centroid + some high
     if (centroidHz > 400 && centroidHz < 2000) sVoices += 1.0;
     sVoices += (hiPct * 0.8);
-    // high freq + lower low -> birds
+
+    // birds: high band / high centroid
     sBirds += (hiPct * 1.8) + (centroidHz > 2500 ? 0.8 : 0);
-    // high flatness -> wind/rain broadband-ish
+
+    // wind/rain: higher flatness (broadband)
     sWind += (flatness * 2.0) + (centroidHz < 1200 ? 0.3 : 0);
-    // water: mid-high + flatter
+
+    // water: mid-high centroid + flatter
     sWater += (flatness * 1.2) + (centroidHz > 1000 && centroidHz < 3500 ? 0.6 : 0);
-    // siren: high centroid + NOT too flat (tonal-ish)
+
+    // siren/alarm: tonal-ish (lower flatness) + higher centroid
     sSiren += (centroidHz > 1500 ? 0.7 : 0) + (flatness < 0.25 ? 0.7 : 0);
-    // music: broad centroid range + not too flat (tonal structure)
+
+    // music: tonal structure (lower flatness) + broad centroid
     sMusic += (centroidHz > 800 && centroidHz < 4000 ? 0.6 : 0) + (flatness < 0.35 ? 0.4 : 0);
+
     // construction: loud + mid centroid
     sConstr += Math.max(0, (levelDb + 55) / 15) + (centroidHz > 700 && centroidHz < 3000 ? 0.3 : 0);
 
-    // Incorporate manual tags as gentle boosts
+    // manual tag boosts
     const boost = (name) => (tags[name] || 0) * 0.8;
     sTraffic += boost("Traffic");
     sVoices  += boost("Voices");
@@ -215,11 +263,8 @@
     return top.map(([k,v]) => [k, (v/sum)*100]);
   }
 
-  // Pleasantness/eventfulness proxies (basic, research-aligned direction)
+  // ---------- Pleasantness/Eventfulness proxies ----------
   function scorePE(topSounds){
-    // Natural-ish: birds/wind/water -> pleasant
-    // Mechanical/siren/construction -> unpleasant
-    // Eventfulness: siren/voices/music/construction -> higher
     let nat = 0, mech = 0, alarm = 0, active = 0;
     for (const [lab,pct] of topSounds){
       const l = lab.toLowerCase();
@@ -235,6 +280,7 @@
     return {pleasant, eventful, quad: quadrant(pleasant, eventful)};
   }
 
+  // ---------- Table rendering ----------
   function renderTable(){
     const recent = logs.slice(-10).reverse();
     if (!recent.length){ el("tableWrap").innerHTML = "<i>No data yet.</i>"; return; }
@@ -268,11 +314,11 @@
     `;
   }
 
+  // ---------- CSV export ----------
   function exportCsv(){
-    // Flatten top sounds and tags for export
     const header = [
-      "time","interval_s","weighting","laeq","lafmax",
-      "centroid_hz","flatness","low_pct","hi_pct",
+      "time","interval_s","weighting","unit","calib_offset_db",
+      "laeq","lafmax","centroid_hz","flatness","low_pct","hi_pct",
       "pleasantness","eventfulness","quadrant",
       "top1_label","top1_pct","top2_label","top2_pct","top3_label","top3_pct","top4_label","top4_pct","top5_label","top5_pct",
       ...TAGS.map(t => `tag_${t}`)
@@ -291,7 +337,7 @@
       }
       const tagCols = TAGS.map(t => (r.tags && (t in r.tags)) ? r.tags[t] : 0);
       lines.push([
-        r.time, r.interval_s, r.weighting,
+        r.time, r.interval_s, r.weighting, r.unit, r.calib_offset_db.toFixed(3),
         r.laeq.toFixed(3), r.lafmax.toFixed(3),
         r.centroid.toFixed(3), r.flatness.toFixed(6),
         r.low_pct.toFixed(6), r.hi_pct.toFixed(6),
@@ -310,27 +356,29 @@
     URL.revokeObjectURL(url);
   }
 
+  // ---------- interval reset ----------
   function resetInterval(){
     sumSquares = 0;
     sampleCount = 0;
-    maxDb = -Infinity;
+    maxDbInterval = -Infinity;
     resetTags();
   }
 
+  // ---------- audio processing tick (fast) ----------
   function tick(){
-    // time-domain for RMS
+    // time-domain RMS
     const td = new Float32Array(analyserTD.fftSize);
     analyserTD.getFloatTimeDomainData(td);
     let ss = 0;
     for (let i=0;i<td.length;i++) ss += td[i]*td[i];
     const rms = Math.sqrt(ss / td.length);
     const db = dbFromRms(rms);
+    instDb = applyCal(db); // calibrated instantaneous
 
-    // FFT for descriptors
+    // FFT descriptors
     const f = new Float32Array(analyserFFT.frequencyBinCount);
-    analyserFFT.getFloatFrequencyData(f); // dB
-    // Convert dB to linear magnitude-ish
-    let mag = new Float32Array(f.length);
+    analyserFFT.getFloatFrequencyData(f); // dB bins
+    const mag = new Float32Array(f.length);
     for (let i=0;i<f.length;i++) mag[i] = Math.pow(10, f[i]/20);
 
     const nyq = audioCtx.sampleRate / 2;
@@ -343,21 +391,20 @@
       num += hz * mag[i];
       den += mag[i];
     }
-    let centroid = den > 0 ? (num/den) : 0;
+    const centroid = den > 0 ? (num/den) : 0;
 
     // flatness
-    let geoMean = 0, arMean = 0;
-    let logSum = 0;
+    let logSum = 0, arMean = 0;
     for (let i=0;i<mag.length;i++){
       const v = mag[i] + 1e-12;
       logSum += Math.log(v);
       arMean += v;
     }
-    geoMean = Math.exp(logSum / mag.length);
+    const geoMean = Math.exp(logSum / mag.length);
     arMean = arMean / mag.length;
-    let flatness = arMean > 0 ? (geoMean / arMean) : 0;
+    const flatness = arMean > 0 ? (geoMean / arMean) : 0;
 
-    // low/high band proportions
+    // low/high proportions
     let low=0, hi=0, tot=0;
     for (let i=0;i<mag.length;i++){
       const hz = i * binHz;
@@ -369,41 +416,60 @@
     const lowPct = tot>0 ? (low/tot) : 0;
     const hiPct  = tot>0 ? (hi/tot) : 0;
 
-    // Smooth for stable UI
+    // descriptor smoothing (for stability)
     const a = 0.15;
     lastCentroid = lastCentroid*(1-a) + centroid*a;
     lastFlatness = lastFlatness*(1-a) + flatness*a;
     lastLowPct   = lastLowPct*(1-a) + lowPct*a;
     lastHiPct    = lastHiPct*(1-a) + hiPct*a;
 
-    // Update UI
-    el("level").textContent = db.toFixed(1);
-    el("bar").style.width = Math.max(0, Math.min(100, (db + 80) * 1.25)) + "%";
+    // LAeq accumulation (un-calibrated RMS^2; calibration applied at reporting stage)
+    sumSquares += rms*rms;
+    sampleCount += 1;
+    if (instDb > maxDbInterval) maxDbInterval = instDb;
+
+    // calibration accumulation (use same RMS^2 so offset computed correctly)
+    if (calActive){
+      calSumSquares += rms*rms;
+      calCount += 1;
+    }
+
+    rafId = requestAnimationFrame(tick);
+  }
+
+  // ---------- slow UI update (~1s) ----------
+  function updateLiveUI(){
+    // slow meter smoothing
+    const alpha = 0.18; // lower = slower
+    displayDb = displayDb*(1-alpha) + instDb*alpha;
+
+    el("level").textContent = displayDb.toFixed(1);
+    el("unit").textContent = currentUnit();
+
+    const pct = Math.max(0, Math.min(100, (displayDb + 80) * 1.25));
+    el("bar").style.width = pct + "%";
+
     el("centroid").textContent = lastCentroid.toFixed(0);
     el("flatness").textContent = lastFlatness.toFixed(3);
     el("lowpct").textContent = (lastLowPct*100).toFixed(0) + "%";
     el("hipct").textContent = (lastHiPct*100).toFixed(0) + "%";
 
-    const top = guessTopSounds(db, lastCentroid, lastFlatness, lastLowPct, lastHiPct, tagCounts);
+    const top = guessTopSounds(displayDb, lastCentroid, lastFlatness, lastLowPct, lastHiPct, tagCounts);
     const pe = scorePE(top);
+
     el("pleasant").textContent = pe.pleasant;
     el("eventful").textContent = pe.eventful;
     el("quad").textContent = pe.quad;
 
     el("topsounds").textContent = top.slice(0,3).map(x => `${x[0]} ${x[1].toFixed(0)}%`).join(" | ");
-
-    // accumulate interval LAeq + LAFmax proxies
-    sumSquares += rms*rms;
-    sampleCount += 1;
-    if (db > maxDb) maxDb = db;
-
-    rafId = requestAnimationFrame(tick);
   }
 
+  // ---------- flush logging interval ----------
   function flushInterval(){
     const intervalSeconds = parseInt(el("interval").value,10) || 30;
     const meanSq = sampleCount > 0 ? (sumSquares / sampleCount) : 0;
-    const laeq = dbFromRms(Math.sqrt(meanSq));
+    const laeq_raw = dbFromRms(Math.sqrt(meanSq));
+    const laeq = applyCal(laeq_raw);
 
     const top = guessTopSounds(laeq, lastCentroid, lastFlatness, lastLowPct, lastHiPct, tagCounts);
     const pe = scorePE(top);
@@ -412,8 +478,10 @@
       time: new Date().toISOString(),
       interval_s: intervalSeconds,
       weighting: el("weighting").value,
+      unit: currentUnit(),
+      calib_offset_db: calibOffsetDb,
       laeq: laeq,
-      lafmax: maxDb,
+      lafmax: maxDbInterval,
       centroid: lastCentroid,
       flatness: lastFlatness,
       low_pct: lastLowPct,
@@ -429,12 +497,44 @@
     resetInterval();
   }
 
+  // ---------- calibration controls ----------
+  function startCalibration(){
+    if (!audioCtx){ setStatus("Start logging first, then calibrate."); return; }
+    calActive = true;
+    calSumSquares = 0;
+    calCount = 0;
+    setStatus("Calibrating for 5 seconds… hold XL2 steady.");
+
+    setTimeout(() => {
+      calActive = false;
+      setStatus("Calibration capture complete. Enter XL2 reading and tap Apply Cal.");
+    }, 5000);
+  }
+
+  function applyCalibration(){
+    if (calCount <= 0){ setStatus("No calibration data. Tap Calibrate (5s) first."); return; }
+
+    const meanSq = calSumSquares / calCount;
+    const cal_dbfs = dbFromRms(Math.sqrt(meanSq)); // raw dBFS proxy during calibration
+    const target = parseFloat(el("calDb").value);
+
+    if (!isFinite(target)){ setStatus("Enter a valid meter reading (e.g. 65.0)."); return; }
+
+    calibOffsetDb = target - cal_dbfs;
+    hasCalibration = true;
+
+    el("offset").textContent = calibOffsetDb.toFixed(1);
+    setStatus("Calibration applied.");
+  }
+
+  // ---------- start/stop ----------
   async function start(){
     if (!secureOk()){
-      alert("Mic is blocked because this page is not secure (https). Open via GitHub Pages https:// URL.");
-      setStatus("Not secure context. Use https://");
+      el("secureNote").style.display = "block";
+      alert("Microphone requires HTTPS. Open this via your GitHub Pages URL.");
       return;
     }
+    el("secureNote").style.display = "none";
 
     try{
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -443,6 +543,7 @@
       });
 
       sourceNode = audioCtx.createMediaStreamSource(micStream);
+
       const w = el("weighting").value;
       weightNode = (w === "A") ? createAWeightingChain(audioCtx, sourceNode) : sourceNode;
 
@@ -455,11 +556,20 @@
       weightNode.connect(analyserTD);
       weightNode.connect(analyserFFT);
 
-      el("unit").textContent = "dBFS proxy";
+      resetInterval();
       setStatus("Running.");
 
-      resetInterval();
+      // enable calibration buttons
+      el("calStart").disabled = false;
+      el("calApply").disabled = false;
+
+      // processing loop
       tick();
+
+      // slow UI update every 1s
+      liveUiTimer = setInterval(updateLiveUI, 1000);
+
+      // interval logging timer
       const intervalSeconds = parseInt(el("interval").value,10) || 30;
       logTimer = setInterval(flushInterval, intervalSeconds * 1000);
 
@@ -468,37 +578,9 @@
       el("export").disabled = false;
     } catch (e){
       setStatus("Mic failed: " + (e && e.name ? e.name : String(e)));
-      alert("Mic permission failed. Check Chrome site permission: Microphone = Allow.");
+      alert("Mic permission failed. In Chrome: site permissions → Microphone → Allow.");
     }
   }
 
   function stop(){
-    if (logTimer) clearInterval(logTimer);
-    logTimer = null;
-    if (rafId) cancelAnimationFrame(rafId);
-    rafId = null;
-
-    if (micStream) micStream.getTracks().forEach(t => t.stop());
-    micStream = null;
-    if (audioCtx) audioCtx.close();
-    audioCtx = null;
-
-    el("start").disabled = false;
-    el("stop").disabled = true;
-    setStatus("Stopped.");
-  }
-
-  // Restart interval timer if interval changes (simple approach: stop/start)
-  el("weighting").addEventListener("change", () => {
-    if (audioCtx) setStatus("Weighting changed. Stop and Start again to apply.");
-  });
-
-  el("start").addEventListener("click", start);
-  el("stop").addEventListener("click", stop);
-  el("export").addEventListener("click", exportCsv);
-
-  renderTable();
-})();
-</script>
-</body>
-</html>
+    if
