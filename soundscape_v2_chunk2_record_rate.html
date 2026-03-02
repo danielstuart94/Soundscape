@@ -1,0 +1,717 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Soundscape V2 (Chunk 2 - Record + Rate)</title>
+  <style>
+    body{font-family:Arial;margin:16px;max-width:1020px}
+    .card{border:1px solid #ddd;border-radius:10px;padding:12px;margin:10px 0}
+    .row{margin:10px 0}
+    button{padding:12px 14px;margin:6px 6px 0 0;font-size:15px}
+    input,select{padding:8px;font-size:15px}
+    .note{font-size:12px;color:#555;line-height:1.35}
+    .hidden{display:none}
+    .pill{display:inline-block;padding:2px 8px;border:1px solid #ddd;border-radius:999px;font-size:12px}
+    table{border-collapse:collapse;width:100%;font-size:12px}
+    th,td{border:1px solid #ddd;padding:6px}
+    th{background:#f3f3f3;text-align:left}
+    .danger{border-color:#c33}
+    .warn{color:#8a0000;font-weight:700}
+    .big{font-size:18px;font-weight:700}
+    .meter{height:12px;background:#eee;border:1px solid #ccc;border-radius:6px;overflow:hidden}
+    .bar{height:100%;width:0%;background:#333}
+    .tagbtn{padding:10px 10px;font-size:14px}
+    .tagbtn.on{outline:2px solid #333}
+    .slider{width: 320px; max-width: 90%}
+    .ok{color:#0b6b2b;font-weight:700}
+  </style>
+</head>
+<body>
+
+<h2>Soundscape V2</h2>
+<div class="note">Chunk 2: record audio clips + rate Pleasantness/Eventfulness + store locally. <span class="pill" id="secure-pill">…</span></div>
+
+<!-- PAGE: landing -->
+<section id="page-landing" class="card">
+  <h3>Consent</h3>
+  <div class="row">
+    <label><input type="checkbox" id="c-audio"> I consent to recording short audio clips</label>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="c-device" checked> Store device/browser info (recommended)</label>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="c-location"> Store location (optional)</label>
+  </div>
+  <div class="row">
+    <button id="btn-start-session">Start session</button>
+    <button id="btn-settings">Settings</button>
+    <button id="btn-sessions">Sessions</button>
+  </div>
+  <div class="note" id="landing-status"></div>
+</section>
+
+<!-- PAGE: settings -->
+<section id="page-settings" class="card hidden">
+  <h3>Settings</h3>
+  <div class="row">
+    Clip length:
+    <select id="set-cliplen">
+      <option value="5">5s</option>
+      <option value="10" selected>10s</option>
+      <option value="15">15s</option>
+    </select>
+  </div>
+  <div class="row">
+    <button id="btn-save-settings">Save</button>
+    <button id="btn-back-landing">Back</button>
+  </div>
+  <div class="note" id="settings-status"></div>
+</section>
+
+<!-- PAGE: sessions list -->
+<section id="page-sessions" class="card hidden">
+  <h3>Sessions</h3>
+  <div class="note">Stored locally on this device (IndexedDB).</div>
+  <div class="row">
+    <button id="btn-refresh-sessions">Refresh</button>
+    <button id="btn-back-from-sessions">Back</button>
+    <button id="btn-delete-all" class="danger">Delete ALL</button>
+  </div>
+  <div class="row" id="sessions-table"></div>
+  <div class="note" id="sessions-status"></div>
+</section>
+
+<!-- PAGE: setup -->
+<section id="page-setup" class="card hidden">
+  <h3>Session setup</h3>
+  <div class="row">
+    Session name: <input id="sess-name" placeholder="e.g. Brixton AM run" style="width:320px"/>
+  </div>
+  <div class="row">
+    Site label: <input id="sess-site" placeholder="e.g. Brixton Station Rd" style="width:320px"/>
+  </div>
+  <div class="row">
+    Context:
+    <select id="sess-context">
+      <option>Street</option><option>Park</option><option>Square</option><option>Office</option>
+      <option>Cafe</option><option>Transit</option><option>Other</option>
+    </select>
+  </div>
+  <div class="row">
+    <button id="btn-begin">Begin capture</button>
+    <button id="btn-cancel-setup">Cancel</button>
+  </div>
+  <div class="note" id="setup-status"></div>
+</section>
+
+<!-- PAGE: capture -->
+<section id="page-capture" class="card hidden">
+  <h3>Capture</h3>
+  <div class="row">
+    <span class="pill" id="cap-meta">—</span>
+    <span class="pill" id="cap-count">Clips: 0</span>
+  </div>
+
+  <div class="row">
+    <span class="big" id="cap-state">Ready</span>
+    <span class="pill" id="cap-timer">—</span>
+  </div>
+
+  <div class="row meter"><div id="live-bar" class="bar"></div></div>
+  <div class="row note">If Record does nothing: your browser is blocking microphone or you opened via non-HTTPS.</div>
+
+  <div class="row">
+    <button id="btn-record">Record clip</button>
+    <button id="btn-stoprec" disabled>Stop</button>
+    <button id="btn-end">End session</button>
+    <button id="btn-back-to-sessions">Back to Sessions</button>
+  </div>
+
+  <div class="row note">Quick tags (optional, applied to next saved clip):</div>
+  <div class="row" id="tagButtons"></div>
+
+  <div class="row note warn" id="secureNote" style="display:none">
+    Microphone requires HTTPS (or localhost). Use your GitHub Pages https:// URL.
+  </div>
+  <div class="note" id="capture-status"></div>
+</section>
+
+<!-- PAGE: rate -->
+<section id="page-rate" class="card hidden">
+  <h3>Rate clip</h3>
+  <div class="row">
+    <span class="pill" id="rate-meta">—</span>
+  </div>
+
+  <div class="row">
+    <audio id="rate-audio" controls style="width:100%"></audio>
+  </div>
+
+  <div class="row">
+    Pleasantness: <b id="p-val">50</b>/100<br/>
+    <input id="p-slider" class="slider" type="range" min="0" max="100" value="50"/>
+  </div>
+
+  <div class="row">
+    Eventfulness: <b id="e-val">50</b>/100<br/>
+    <input id="e-slider" class="slider" type="range" min="0" max="100" value="50"/>
+  </div>
+
+  <div class="row">
+    Expected/normal here?
+    <select id="expected">
+      <option value="">(skip)</option>
+      <option value="yes">Yes</option>
+      <option value="no">No</option>
+    </select>
+  </div>
+
+  <div class="row">What stood out? (optional)</div>
+  <div class="row" id="standoutButtons"></div>
+
+  <div class="row">
+    <button id="btn-save-rating">Save rating</button>
+    <button id="btn-discard-clip" class="danger">Discard clip</button>
+  </div>
+
+  <div class="note" id="rate-status"></div>
+</section>
+
+<script>
+(() => {
+  // --------- Router ----------
+  const pages = ["landing","settings","sessions","setup","capture","rate"];
+  const show = (name) => {
+    pages.forEach(p => document.getElementById(`page-${p}`).classList.add("hidden"));
+    document.getElementById(`page-${name}`).classList.remove("hidden");
+  };
+  const el = (id) => document.getElementById(id);
+  const secureOk = () => (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1");
+
+  // --------- DB ----------
+  const DB_NAME = "soundscape_v2";
+  const DB_VER = 1;
+  const STORES = { sessions:"sessions", clips:"clips" };
+
+  function openDB(){
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VER);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(STORES.sessions)) {
+          const s = db.createObjectStore(STORES.sessions, { keyPath: "session_id" });
+          s.createIndex("created_at", "created_at", { unique:false });
+        }
+        if (!db.objectStoreNames.contains(STORES.clips)) {
+          const c = db.createObjectStore(STORES.clips, { keyPath: "clip_id" });
+          c.createIndex("session_id", "session_id", { unique:false });
+          c.createIndex("timestamp", "timestamp", { unique:false });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function idbPut(storeName, value){
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readwrite");
+      tx.objectStore(storeName).put(value);
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+  }
+  async function idbGet(storeName, key){
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readonly");
+      const req = tx.objectStore(storeName).get(key);
+      req.onsuccess = () => { db.close(); resolve(req.result || null); };
+      req.onerror = () => { db.close(); reject(req.error); };
+    });
+  }
+  async function idbGetAll(storeName){
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readonly");
+      const req = tx.objectStore(storeName).getAll();
+      req.onsuccess = () => { db.close(); resolve(req.result || []); };
+      req.onerror = () => { db.close(); reject(req.error); };
+    });
+  }
+  async function idbDelete(storeName, key){
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readwrite");
+      tx.objectStore(storeName).delete(key);
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+  }
+  async function idbClear(storeName){
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readwrite");
+      tx.objectStore(storeName).clear();
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+  }
+  async function idbGetClipsForSession(session_id){
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORES.clips, "readonly");
+      const idx = tx.objectStore(STORES.clips).index("session_id");
+      const req = idx.getAll(session_id);
+      req.onsuccess = () => { db.close(); resolve(req.result || []); };
+      req.onerror = () => { db.close(); reject(req.error); };
+    });
+  }
+
+  // --------- Helpers ----------
+  function escapeHtml(str){
+    return String(str).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;").replaceAll("'","&#039;");
+  }
+  function fmtDate(iso){
+    try { return new Date(iso).toLocaleString(); } catch { return iso; }
+  }
+
+  // --------- State ----------
+  const state = {
+    consent: { audio:false, device:true, location:false },
+    settings: { clipLen:10 },
+    session: null,
+    mediaStream: null,
+    mediaRecorder: null,
+    recChunks: [],
+    recStartTs: null,
+    recStopTimer: null,
+    liveCtx: null,
+    liveAnalyser: null,
+    liveRAF: null,
+    quickTags: new Set(),
+    pendingClip: null,
+    pendingClipUrl: null,
+    standout: new Set()
+  };
+
+  // --------- Tags UI ----------
+  const QUICK_TAGS = ["Voices","Traffic","Birds","Siren","Music","Construction","Wind","Water","Other"];
+  const STANDOUT_TAGS = ["Voices","Shouting","Laughter","Traffic steady","Traffic revving","Siren/alarm","Birds","Music","Construction","Wind","Water","Other"];
+
+  function buildTagButtons(containerId, tags, setRef){
+    const wrap = el(containerId);
+    wrap.innerHTML = "";
+    tags.forEach(t => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "tagbtn";
+      b.textContent = t;
+      b.addEventListener("click", () => {
+        if (setRef.has(t)) { setRef.delete(t); b.classList.remove("on"); }
+        else { setRef.add(t); b.classList.add("on"); }
+      });
+      wrap.appendChild(b);
+    });
+  }
+
+  // --------- Sessions UI ----------
+  async function renderSessions(){
+    const box = el("sessions-table");
+    el("sessions-status").textContent = "Loading…";
+    let sessions = [];
+    try { sessions = await idbGetAll(STORES.sessions); }
+    catch(e){ el("sessions-status").textContent = "DB error: " + e; box.innerHTML=""; return; }
+    sessions.sort((a,b) => (b.created_at||"").localeCompare(a.created_at||""));
+    if (!sessions.length){
+      box.innerHTML = "<i>No sessions yet.</i>";
+      el("sessions-status").textContent = "";
+      return;
+    }
+
+    const rows = sessions.map(s => `
+      <tr>
+        <td>${fmtDate(s.created_at)}</td>
+        <td>${escapeHtml(s.site||"")}</td>
+        <td>${escapeHtml(s.context||"")}</td>
+        <td>${escapeHtml(s.name||"")}</td>
+        <td><code>${s.session_id.slice(0,8)}</code></td>
+        <td>${(s.clip_count ?? 0)}</td>
+        <td>
+          <button data-open="${s.session_id}">Open</button>
+          <button data-del="${s.session_id}">Delete</button>
+        </td>
+      </tr>
+    `).join("");
+
+    box.innerHTML = `
+      <table>
+        <thead><tr>
+          <th>Created</th><th>Site</th><th>Context</th><th>Name</th><th>ID</th><th>Clips</th><th>Actions</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    box.querySelectorAll("button[data-open]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const id = btn.getAttribute("data-open");
+        const sess = await idbGet(STORES.sessions, id);
+        if (!sess) { el("sessions-status").textContent = "Session not found."; return; }
+        state.session = sess;
+        const clips = await idbGetClipsForSession(sess.session_id);
+        el("cap-meta").textContent = `${sess.site} • ${sess.context} • ${sess.session_id.slice(0,8)}`;
+        el("cap-count").textContent = `Clips: ${clips.length}`;
+        el("capture-status").textContent = "Loaded session. Tap Record clip.";
+        state.quickTags.clear();
+        buildTagButtons("tagButtons", QUICK_TAGS, state.quickTags);
+        show("capture");
+      });
+    });
+
+    box.querySelectorAll("button[data-del]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const id = btn.getAttribute("data-del");
+        if (!confirm("Delete this session and its clips?")) return;
+        const clips = await idbGetClipsForSession(id);
+        for (const c of clips) await idbDelete(STORES.clips, c.clip_id);
+        await idbDelete(STORES.sessions, id);
+        await renderSessions();
+        el("sessions-status").textContent = "Deleted.";
+      });
+    });
+
+    el("sessions-status").textContent = "";
+  }
+
+  async function refreshClipCount(){
+    if (!state.session) return;
+    const clips = await idbGetClipsForSession(state.session.session_id);
+    el("cap-count").textContent = `Clips: ${clips.length}`;
+  }
+
+  // --------- Live meter ----------
+  function startLiveMeter(stream){
+    stopLiveMeter();
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    state.liveCtx = new AudioCtx();
+    const src = state.liveCtx.createMediaStreamSource(stream);
+    state.liveAnalyser = state.liveCtx.createAnalyser();
+    state.liveAnalyser.fftSize = 1024;
+    src.connect(state.liveAnalyser);
+
+    let display = -70;
+    const td = new Float32Array(state.liveAnalyser.fftSize);
+
+    const loop = () => {
+      state.liveAnalyser.getFloatTimeDomainData(td);
+      let ss=0;
+      for (let i=0;i<td.length;i++) ss += td[i]*td[i];
+      const rms = Math.sqrt(ss / td.length);
+      const db = 20*Math.log10(rms + 1e-12);
+      display = display*0.9 + db*0.1;
+      const pct = Math.max(0, Math.min(100, (display + 80)*1.25));
+      el("live-bar").style.width = pct + "%";
+      state.liveRAF = requestAnimationFrame(loop);
+    };
+    state.liveRAF = requestAnimationFrame(loop);
+  }
+
+  function stopLiveMeter(){
+    if (state.liveRAF) cancelAnimationFrame(state.liveRAF);
+    state.liveRAF = null;
+    if (state.liveCtx) state.liveCtx.close().catch(()=>{});
+    state.liveCtx = null;
+    state.liveAnalyser = null;
+    el("live-bar").style.width = "0%";
+  }
+
+  // --------- Recording ----------
+  function pickMimeType(){
+    const prefs = ["audio/webm;codecs=opus","audio/webm","audio/ogg;codecs=opus","audio/ogg","audio/mp4"];
+    for (const m of prefs){
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) return m;
+    }
+    return "";
+  }
+
+  async function ensureMic(){
+    if (state.mediaStream) return state.mediaStream;
+    if (!secureOk()){
+      el("secureNote").style.display = "block";
+      throw new Error("Not HTTPS. Use GitHub Pages https:// URL.");
+    }
+    el("secureNote").style.display = "none";
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    state.mediaStream = stream;
+    startLiveMeter(stream);
+    return stream;
+  }
+
+  function setCaptureUI(isRec, label, timer){
+    el("cap-state").textContent = label || (isRec ? "Recording…" : "Ready");
+    el("cap-timer").textContent = timer || "";
+    el("btn-record").disabled = isRec;
+    el("btn-stoprec").disabled = !isRec;
+  }
+
+  async function startRecording(){
+    el("capture-status").textContent = "";
+    if (!state.session){
+      el("capture-status").textContent = "No session loaded. Open/create a session first.";
+      return;
+    }
+    try{
+      await ensureMic();
+    } catch(e){
+      el("capture-status").textContent = "Mic error: " + (e.message || e);
+      alert("Mic failed.\n\nFix:\n- Ensure you're on https://\n- Chrome: padlock → permissions → Microphone → Allow\n- Reload page");
+      return;
+    }
+
+    // cleanup previous pending URL
+    if (state.pendingClipUrl){ URL.revokeObjectURL(state.pendingClipUrl); state.pendingClipUrl=null; }
+
+    const mimeType = pickMimeType();
+    state.recChunks = [];
+    state.recStartTs = new Date().toISOString();
+
+    try{
+      state.mediaRecorder = new MediaRecorder(state.mediaStream, mimeType ? {mimeType} : undefined);
+    } catch(e){
+      el("capture-status").textContent = "MediaRecorder init failed: " + e;
+      alert("MediaRecorder failed. Use Chrome on Android.");
+      return;
+    }
+
+    state.mediaRecorder.addEventListener("dataavailable", (evt) => {
+      if (evt.data && evt.data.size > 0) state.recChunks.push(evt.data);
+    });
+
+    state.mediaRecorder.addEventListener("stop", async () => {
+      try{
+        const blob = new Blob(state.recChunks, { type: state.mediaRecorder.mimeType || "audio/webm" });
+        const clip_id = crypto.randomUUID();
+
+        const clip = {
+          clip_id,
+          session_id: state.session.session_id,
+          timestamp: state.recStartTs,
+          duration_s: state.settings.clipLen,
+          mime_type: blob.type,
+          audio_blob: blob,
+          quick_tags: Array.from(state.quickTags),
+          pleasantness: null,
+          eventfulness: null,
+          expectedness: "",
+          standout: []
+        };
+
+        await idbPut(STORES.clips, clip);
+
+        // update session clip_count
+        state.session.clip_count = (state.session.clip_count || 0) + 1;
+        await idbPut(STORES.sessions, state.session);
+        await refreshClipCount();
+
+        // prep rate page
+        state.pendingClip = clip;
+        state.pendingClipUrl = URL.createObjectURL(blob);
+        el("rate-audio").src = state.pendingClipUrl;
+        el("rate-meta").textContent = `${state.session.site} • ${clip.timestamp} • ${clip.duration_s}s`;
+        el("rate-status").textContent = "";
+
+        // reset standout + sliders
+        state.standout.clear();
+        buildTagButtons("standoutButtons", STANDOUT_TAGS, state.standout);
+        el("p-slider").value = "50"; el("p-val").textContent = "50";
+        el("e-slider").value = "50"; el("e-val").textContent = "50";
+        el("expected").value = "";
+
+        // reset quick tags for next clip
+        state.quickTags.clear();
+        buildTagButtons("tagButtons", QUICK_TAGS, state.quickTags);
+
+        setCaptureUI(false, "Saved", "");
+        show("rate");
+      } catch(err){
+        el("capture-status").textContent = "Save clip failed: " + (err.message || err);
+      } finally {
+        clearInterval(state.recStopTimer);
+        state.recStopTimer = null;
+      }
+    });
+
+    // start recording
+    const clipLen = state.settings.clipLen;
+    let remaining = clipLen;
+    setCaptureUI(true, "Recording…", `${remaining}s`);
+    try { state.mediaRecorder.start(); } catch(e){
+      el("capture-status").textContent = "Recorder start failed: " + e;
+      setCaptureUI(false, "Ready", "");
+      return;
+    }
+
+    state.recStopTimer = setInterval(() => {
+      remaining -= 1;
+      el("cap-timer").textContent = `${remaining}s`;
+      if (remaining <= 0) stopRecording();
+    }, 1000);
+  }
+
+  function stopRecording(){
+    if (!state.mediaRecorder) return;
+    try{
+      if (state.mediaRecorder.state !== "inactive") state.mediaRecorder.stop();
+    } catch(e){
+      el("capture-status").textContent = "Stop failed: " + e;
+    }
+    setCaptureUI(false, "Processing…", "");
+  }
+
+  async function saveRating(){
+    if (!state.pendingClip){ el("rate-status").textContent = "No pending clip."; return; }
+    const p = parseInt(el("p-slider").value,10);
+    const e = parseInt(el("e-slider").value,10);
+    const expected = el("expected").value || "";
+    const standout = Array.from(state.standout);
+
+    const clip = await idbGet(STORES.clips, state.pendingClip.clip_id);
+    if (!clip){ el("rate-status").textContent = "Clip missing from DB."; return; }
+
+    clip.pleasantness = p;
+    clip.eventfulness = e;
+    clip.expectedness = expected;
+    clip.standout = standout;
+    await idbPut(STORES.clips, clip);
+
+    el("rate-status").textContent = "Saved.";
+    state.pendingClip = null;
+    show("capture");
+    el("cap-state").textContent = "Ready";
+    el("cap-timer").textContent = "";
+  }
+
+  async function discardClip(){
+    if (!state.pendingClip){ el("rate-status").textContent = "No pending clip."; return; }
+    if (!confirm("Discard this clip?")) return;
+
+    await idbDelete(STORES.clips, state.pendingClip.clip_id);
+
+    state.session.clip_count = Math.max(0, (state.session.clip_count || 0) - 1);
+    await idbPut(STORES.sessions, state.session);
+    await refreshClipCount();
+
+    if (state.pendingClipUrl){ URL.revokeObjectURL(state.pendingClipUrl); state.pendingClipUrl=null; }
+    state.pendingClip = null;
+
+    el("rate-status").textContent = "Discarded.";
+    show("capture");
+    el("cap-state").textContent = "Ready";
+  }
+
+  // --------- Landing/Setup ----------
+  el("btn-settings").addEventListener("click", () => show("settings"));
+  el("btn-back-landing").addEventListener("click", () => show("landing"));
+  el("btn-sessions").addEventListener("click", async () => { show("sessions"); await renderSessions(); });
+  el("btn-back-from-sessions").addEventListener("click", () => show("landing"));
+  el("btn-refresh-sessions").addEventListener("click", async () => await renderSessions());
+  el("btn-delete-all").addEventListener("click", async () => {
+    if (!confirm("Delete ALL sessions and clips on this device?")) return;
+    await idbClear(STORES.sessions);
+    await idbClear(STORES.clips);
+    await renderSessions();
+    el("sessions-status").textContent = "All deleted.";
+  });
+
+  el("btn-save-settings").addEventListener("click", () => {
+    state.settings.clipLen = parseInt(el("set-cliplen").value,10);
+    el("settings-status").textContent = "Saved.";
+  });
+
+  el("btn-start-session").addEventListener("click", () => {
+    state.consent.audio = el("c-audio").checked;
+    state.consent.device = el("c-device").checked;
+    state.consent.location = el("c-location").checked;
+
+    if (!state.consent.audio) {
+      el("landing-status").textContent = "Audio consent is required to proceed.";
+      return;
+    }
+    el("landing-status").textContent = "";
+    show("setup");
+  });
+
+  el("btn-cancel-setup").addEventListener("click", () => show("landing"));
+
+  el("btn-begin").addEventListener("click", async () => {
+    const name = el("sess-name").value.trim();
+    const site = el("sess-site").value.trim();
+    const context = el("sess-context").value;
+    if (!name || !site) { el("setup-status").textContent = "Enter session name + site label."; return; }
+
+    const session = {
+      session_id: crypto.randomUUID(),
+      created_at: new Date().toISOString(),
+      name, site, context,
+      clip_count: 0
+    };
+    await idbPut(STORES.sessions, session);
+    state.session = session;
+
+    el("cap-meta").textContent = `${session.site} • ${session.context} • ${session.session_id.slice(0,8)}`;
+    el("cap-count").textContent = "Clips: 0";
+    el("capture-status").textContent = "Ready to record.";
+    state.quickTags.clear();
+    buildTagButtons("tagButtons", QUICK_TAGS, state.quickTags);
+    show("capture");
+  });
+
+  // --------- Capture page controls ----------
+  el("btn-record").addEventListener("click", startRecording);
+  el("btn-stoprec").addEventListener("click", stopRecording);
+  el("btn-back-to-sessions").addEventListener("click", async () => { show("sessions"); await renderSessions(); });
+  el("btn-end").addEventListener("click", () => {
+    // cleanup mic
+    try{
+      if (state.mediaRecorder && state.mediaRecorder.state !== "inactive") state.mediaRecorder.stop();
+    } catch {}
+    state.mediaRecorder = null;
+    if (state.mediaStream){
+      state.mediaStream.getTracks().forEach(t => t.stop());
+      state.mediaStream = null;
+    }
+    stopLiveMeter();
+    clearInterval(state.recStopTimer); state.recStopTimer=null;
+    state.session = null;
+    show("landing");
+  });
+
+  // --------- Rating controls ----------
+  el("p-slider").addEventListener("input", () => el("p-val").textContent = el("p-slider").value);
+  el("e-slider").addEventListener("input", () => el("e-val").textContent = el("e-slider").value);
+  el("btn-save-rating").addEventListener("click", saveRating);
+  el("btn-discard-clip").addEventListener("click", discardClip);
+
+  // --------- Boot ----------
+  if (!secureOk()) {
+    el("secureNote").style.display = "block";
+    el("secure-pill").textContent = "NOT HTTPS";
+  } else {
+    el("secure-pill").textContent = "HTTPS OK";
+    el("secure-pill").classList.add("ok");
+  }
+
+  // Build initial button sets so nothing is empty
+  buildTagButtons("tagButtons", QUICK_TAGS, state.quickTags);
+  buildTagButtons("standoutButtons", STANDOUT_TAGS, state.standout);
+
+  show("landing");
+})();
+</script>
+
+</body>
+</html>
