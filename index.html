@@ -1,11 +1,11 @@
- <!doctype html>
+<!doctype html>
 <html>
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Soundscape V2 (Chunk 1 - DB)</title>
+  <title>Soundscape V2 (Chunk 2 - Record + Rate)</title>
   <style>
-    body{font-family:Arial;margin:16px;max-width:980px}
+    body{font-family:Arial;margin:16px;max-width:1020px}
     .card{border:1px solid #ddd;border-radius:10px;padding:12px;margin:10px 0}
     .row{margin:10px 0}
     button{padding:12px 14px;margin:6px 6px 0 0;font-size:15px}
@@ -17,12 +17,19 @@
     th,td{border:1px solid #ddd;padding:6px}
     th{background:#f3f3f3;text-align:left}
     .danger{border-color:#c33}
+    .warn{color:#8a0000;font-weight:700}
+    .big{font-size:18px;font-weight:700}
+    .meter{height:12px;background:#eee;border:1px solid #ccc;border-radius:6px;overflow:hidden}
+    .bar{height:100%;width:0%;background:#333}
+    .tagbtn{padding:10px 10px;font-size:14px}
+    .tagbtn.on{outline:2px solid #333}
+    .slider{width: 320px; max-width: 90%}
   </style>
 </head>
 <body>
 
 <h2>Soundscape V2</h2>
-<div class="note">Chunk 1: IndexedDB persistence + session list.</div>
+<div class="note">Chunk 2: Offline-first sessions + record audio clips + rate Pleasantness/Eventfulness + store in IndexedDB.</div>
 
 <!-- PAGE: landing -->
 <section id="page-landing" class="card">
@@ -62,13 +69,7 @@
       <option value="30">Every 30s</option>
       <option value="60">Every 60s</option>
     </select>
-  </div>
-  <div class="row">
-    Features:
-    <label><input type="checkbox" id="set-basic" checked> Basic (LAeq/Lmax proxies)</label><br/>
-    <label><input type="checkbox" id="set-activity" checked> Activity (flux proxy)</label><br/>
-    <label><input type="checkbox" id="set-spectral" checked> Spectral (centroid/flatness)</label><br/>
-    <label><input type="checkbox" id="set-oct" > Approx octave bands (slower)</label>
+    <span class="note">(Auto mode added later.)</span>
   </div>
   <div class="row">
     <button id="btn-save-settings">Save</button>
@@ -107,7 +108,7 @@
     </select>
   </div>
   <div class="row">
-    Optional site photo: <input type="file" id="sess-photo" accept="image/*" capture="environment"/>
+    Optional site photo (stored later): <input type="file" id="sess-photo" accept="image/*" capture="environment"/>
   </div>
   <div class="row">
     <button id="btn-begin">Begin capture</button>
@@ -116,37 +117,98 @@
   <div class="note" id="setup-status"></div>
 </section>
 
-<!-- PAGE: capture (placeholder) -->
+<!-- PAGE: capture -->
 <section id="page-capture" class="card hidden">
   <h3>Capture</h3>
-  <div class="note">Chunk 2 will add mic recording + clip storage + rating flow.</div>
   <div class="row">
     <span class="pill" id="cap-meta">—</span>
+    <span class="pill" id="cap-count">Clips: 0</span>
   </div>
+
   <div class="row">
+    <span class="big" id="cap-state">Ready</span>
+    <span class="pill" id="cap-timer">—</span>
+  </div>
+
+  <div class="row meter"><div id="live-bar" class="bar"></div></div>
+  <div class="row note">Live level is a rough proxy (not calibrated). Recording uses MediaRecorder.</div>
+
+  <div class="row">
+    <button id="btn-record">Record clip</button>
+    <button id="btn-stoprec" disabled>Stop</button>
     <button id="btn-end">End session</button>
     <button id="btn-back-to-sessions">Back to Sessions</button>
   </div>
+
+  <div class="row note">
+    Quick tags (optional, applied to the next saved clip):
+  </div>
+  <div class="row" id="tagButtons"></div>
+
+  <div class="row note warn" id="secureNote" style="display:none">
+    Microphone requires HTTPS (or localhost). Use GitHub Pages URL.
+  </div>
   <div class="note" id="capture-status"></div>
+</section>
+
+<!-- PAGE: rate -->
+<section id="page-rate" class="card hidden">
+  <h3>Rate clip</h3>
+  <div class="row">
+    <span class="pill" id="rate-meta">—</span>
+  </div>
+
+  <div class="row">
+    <audio id="rate-audio" controls style="width:100%"></audio>
+  </div>
+
+  <div class="row">
+    Pleasantness: <b id="p-val">50</b>/100<br/>
+    <input id="p-slider" class="slider" type="range" min="0" max="100" value="50"/>
+  </div>
+
+  <div class="row">
+    Eventfulness: <b id="e-val">50</b>/100<br/>
+    <input id="e-slider" class="slider" type="range" min="0" max="100" value="50"/>
+  </div>
+
+  <div class="row">
+    Expected/normal here?
+    <select id="expected">
+      <option value="">(skip)</option>
+      <option value="yes">Yes</option>
+      <option value="no">No</option>
+    </select>
+  </div>
+
+  <div class="row">
+    What stood out? (optional)
+  </div>
+  <div class="row" id="standoutButtons"></div>
+
+  <div class="row">
+    <button id="btn-save-rating">Save rating</button>
+    <button id="btn-discard-clip" class="danger">Discard clip</button>
+  </div>
+
+  <div class="note" id="rate-status"></div>
 </section>
 
 <script>
 (() => {
   // ---------------- Router ----------------
-  const pages = ["landing","settings","sessions","setup","capture"];
+  const pages = ["landing","settings","sessions","setup","capture","rate"];
   const show = (name) => {
     for (const p of pages) document.getElementById(`page-${p}`).classList.add("hidden");
     document.getElementById(`page-${name}`).classList.remove("hidden");
   };
   const el = (id) => document.getElementById(id);
+  const secureOk = () => (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1");
 
   // ---------------- IndexedDB ----------------
   const DB_NAME = "soundscape_v2";
   const DB_VER = 1;
-  const STORES = {
-    sessions: "sessions",
-    clips: "clips" // reserved for Chunk 2+
-  };
+  const STORES = { sessions:"sessions", clips:"clips" };
 
   function openDB(){
     return new Promise((resolve, reject) => {
@@ -155,12 +217,12 @@
         const db = req.result;
         if (!db.objectStoreNames.contains(STORES.sessions)) {
           const s = db.createObjectStore(STORES.sessions, { keyPath: "session_id" });
-          s.createIndex("created_at", "created_at", { unique: false });
+          s.createIndex("created_at", "created_at", { unique:false });
         }
         if (!db.objectStoreNames.contains(STORES.clips)) {
           const c = db.createObjectStore(STORES.clips, { keyPath: "clip_id" });
-          c.createIndex("session_id", "session_id", { unique: false });
-          c.createIndex("timestamp", "timestamp", { unique: false });
+          c.createIndex("session_id", "session_id", { unique:false });
+          c.createIndex("timestamp", "timestamp", { unique:false });
         }
       };
       req.onsuccess = () => resolve(req.result);
@@ -218,29 +280,76 @@
     });
   }
 
-  // ---------------- App state ----------------
-  const state = {
-    consent: { audio:false, device:true, location:false },
-    settings: { clipLen:10, mode:"manual", basic:true, activity:true, spectral:true, oct:false },
-    session: null,
-  };
+  async function idbGetClipsForSession(session_id){
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORES.clips, "readonly");
+      const idx = tx.objectStore(STORES.clips).index("session_id");
+      const req = idx.getAll(session_id);
+      req.onsuccess = () => { db.close(); resolve(req.result || []); };
+      req.onerror = () => { db.close(); reject(req.error); };
+    });
+  }
 
-  // ---------------- Sessions UI ----------------
+  // ---------------- Utilities ----------------
+  function escapeHtml(str){
+    return String(str)
+      .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;").replaceAll("'","&#039;");
+  }
   function fmtDate(iso){
     try { return new Date(iso).toLocaleString(); } catch { return iso; }
   }
 
+  // ---------------- App state ----------------
+  const state = {
+    consent: { audio:false, device:true, location:false },
+    settings: { clipLen:10, mode:"manual" },
+    session: null,
+    // recording
+    mediaStream: null,
+    mediaRecorder: null,
+    recChunks: [],
+    recStartTs: null,
+    recStopTimer: null,
+    liveCtx: null,
+    liveAnalyser: null,
+    liveRAF: null,
+    quickTags: new Set(),
+    // current clip pending rating
+    pendingClip: null,
+    pendingClipUrl: null,
+    standout: new Set()
+  };
+
+  // ---------------- Tags UI ----------------
+  const QUICK_TAGS = ["Voices","Traffic","Birds","Siren","Music","Construction","Wind","Water","Other"];
+  const STANDOUT_TAGS = ["Voices","Shouting","Laughter","Traffic steady","Traffic revving","Siren/alarm","Birds","Music","Construction","Wind","Water","Other"];
+
+  function buildTagButtons(containerId, tags, setRef){
+    const wrap = el(containerId);
+    wrap.innerHTML = "";
+    tags.forEach(t => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "tagbtn";
+      b.textContent = t;
+      b.onclick = () => {
+        if (setRef.has(t)) { setRef.delete(t); b.classList.remove("on"); }
+        else { setRef.add(t); b.classList.add("on"); }
+      };
+      wrap.appendChild(b);
+    });
+  }
+
+  // ---------------- Sessions UI ----------------
   async function renderSessions(){
     const box = el("sessions-table");
     el("sessions-status").textContent = "Loading…";
     let sessions = [];
-    try {
-      sessions = await idbGetAll(STORES.sessions);
-    } catch (e) {
-      el("sessions-status").textContent = "DB error: " + e;
-      box.innerHTML = "";
-      return;
-    }
+    try { sessions = await idbGetAll(STORES.sessions); }
+    catch(e){ el("sessions-status").textContent = "DB error: " + e; box.innerHTML=""; return; }
+
     sessions.sort((a,b) => (b.created_at||"").localeCompare(a.created_at||""));
 
     if (!sessions.length){
@@ -256,7 +365,7 @@
         <td>${escapeHtml(s.context||"")}</td>
         <td>${escapeHtml(s.name||"")}</td>
         <td><code>${s.session_id.slice(0,8)}</code></td>
-        <td>${(s.clip_count ?? (s.clips ? s.clips.length : 0))}</td>
+        <td>${(s.clip_count ?? 0)}</td>
         <td>
           <button data-open="${s.session_id}">Open</button>
           <button data-del="${s.session_id}">Delete</button>
@@ -275,15 +384,19 @@
       </table>
     `;
 
-    // wire buttons
     box.querySelectorAll("button[data-open]").forEach(btn => {
       btn.onclick = async () => {
         const id = btn.getAttribute("data-open");
         const sess = await idbGet(STORES.sessions, id);
         if (!sess) { el("sessions-status").textContent = "Session not found."; return; }
         state.session = sess;
+
+        const clips = await idbGetClipsForSession(sess.session_id);
+        const count = clips.length;
+
         el("cap-meta").textContent = `${sess.site} • ${sess.context} • ${sess.session_id.slice(0,8)}`;
-        el("capture-status").textContent = "Loaded session (capture features added in Chunk 2).";
+        el("cap-count").textContent = `Clips: ${count}`;
+        el("capture-status").textContent = "Loaded session. Ready to record.";
         show("capture");
       };
     });
@@ -291,8 +404,11 @@
     box.querySelectorAll("button[data-del]").forEach(btn => {
       btn.onclick = async () => {
         const id = btn.getAttribute("data-del");
-        if (!confirm("Delete this session?")) return;
+        if (!confirm("Delete this session? (clips remain until later cleanup)")) return;
         await idbDelete(STORES.sessions, id);
+        // also delete clips for session (cleanup now)
+        const clips = await idbGetClipsForSession(id);
+        for (const c of clips) await idbDelete(STORES.clips, c.clip_id);
         await renderSessions();
         el("sessions-status").textContent = "Deleted.";
       };
@@ -301,102 +417,163 @@
     el("sessions-status").textContent = "";
   }
 
-  function escapeHtml(str){
-    return String(str)
-      .replaceAll("&","&amp;")
-      .replaceAll("<","&lt;")
-      .replaceAll(">","&gt;")
-      .replaceAll('"',"&quot;")
-      .replaceAll("'","&#039;");
+  async function refreshClipCount(){
+    if (!state.session) return;
+    const clips = await idbGetClipsForSession(state.session.session_id);
+    el("cap-count").textContent = `Clips: ${clips.length}`;
   }
 
-  // ---------------- UI wiring ----------------
-  el("btn-settings").onclick = () => show("settings");
-  el("btn-back-landing").onclick = () => show("landing");
-  el("btn-sessions").onclick = async () => { show("sessions"); await renderSessions(); };
-  el("btn-back-from-sessions").onclick = () => show("landing");
-  el("btn-refresh-sessions").onclick = async () => { await renderSessions(); };
+  // ---------------- Live meter (simple proxy) ----------------
+  function startLiveMeter(stream){
+    stopLiveMeter();
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    state.liveCtx = new AudioCtx();
+    const src = state.liveCtx.createMediaStreamSource(stream);
+    state.liveAnalyser = state.liveCtx.createAnalyser();
+    state.liveAnalyser.fftSize = 1024;
+    src.connect(state.liveAnalyser);
 
-  el("btn-delete-all").onclick = async () => {
-    if (!confirm("Delete ALL sessions on this device?")) return;
-    await idbClear(STORES.sessions);
-    await idbClear(STORES.clips);
-    await renderSessions();
-    el("sessions-status").textContent = "All deleted.";
-  };
+    let display = -70;
+    const td = new Float32Array(state.liveAnalyser.fftSize);
 
-  el("btn-save-settings").onclick = () => {
-    state.settings.clipLen = parseInt(el("set-cliplen").value,10);
-    state.settings.mode = el("set-mode").value;
-    state.settings.basic = el("set-basic").checked;
-    state.settings.activity = el("set-activity").checked;
-    state.settings.spectral = el("set-spectral").checked;
-    state.settings.oct = el("set-oct").checked;
-    el("settings-status").textContent = "Saved.";
-  };
+    const loop = () => {
+      state.liveAnalyser.getFloatTimeDomainData(td);
+      let ss=0;
+      for (let i=0;i<td.length;i++) ss += td[i]*td[i];
+      const rms = Math.sqrt(ss / td.length);
+      const db = 20*Math.log10(rms + 1e-12);
+      display = display*0.9 + db*0.1;
 
-  el("btn-start-session").onclick = () => {
-    state.consent.audio = el("c-audio").checked;
-    state.consent.device = el("c-device").checked;
-    state.consent.location = el("c-location").checked;
+      const pct = Math.max(0, Math.min(100, (display + 80)*1.25));
+      el("live-bar").style.width = pct + "%";
+      state.liveRAF = requestAnimationFrame(loop);
+    };
+    state.liveRAF = requestAnimationFrame(loop);
+  }
 
-    if (!state.consent.audio) {
-      el("landing-status").textContent = "Audio consent is required to proceed.";
+  function stopLiveMeter(){
+    if (state.liveRAF) cancelAnimationFrame(state.liveRAF);
+    state.liveRAF = null;
+    if (state.liveCtx) state.liveCtx.close().catch(()=>{});
+    state.liveCtx = null;
+    state.liveAnalyser = null;
+    el("live-bar").style.width = "0%";
+  }
+
+  // ---------------- Recording ----------------
+  function pickMimeType(){
+    const prefs = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/mp4", // sometimes supported
+      "audio/ogg;codecs=opus",
+      "audio/ogg"
+    ];
+    for (const m of prefs){
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) return m;
+    }
+    return ""; // let browser choose
+  }
+
+  async function ensureMic(){
+    if (state.mediaStream) return state.mediaStream;
+    if (!secureOk()){
+      el("secureNote").style.display = "block";
+      throw new Error("Not secure context (HTTPS required).");
+    }
+    el("secureNote").style.display = "none";
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation:false, noiseSuppression:false, autoGainControl:false }
+    });
+    state.mediaStream = stream;
+    startLiveMeter(stream);
+    return stream;
+  }
+
+  function setCaptureUI(running, label, timerText){
+    el("cap-state").textContent = label || (running ? "Recording…" : "Ready");
+    el("cap-timer").textContent = timerText || "";
+    el("btn-record").disabled = running;
+    el("btn-stoprec").disabled = !running;
+  }
+
+  async function startRecording(){
+    if (!state.session){
+      el("capture-status").textContent = "No session loaded.";
       return;
     }
-    el("landing-status").textContent = "";
-    show("setup");
-  };
+    try{
+      await ensureMic();
+    } catch(e){
+      el("capture-status").textContent = "Mic error: " + (e.message || e);
+      alert("Mic failed. Ensure permissions are allowed and you are on HTTPS.");
+      return;
+    }
 
-  el("btn-cancel-setup").onclick = () => show("landing");
+    // reset outstanding pending clip URL
+    if (state.pendingClipUrl){ URL.revokeObjectURL(state.pendingClipUrl); state.pendingClipUrl=null; }
 
-  el("btn-begin").onclick = async () => {
-    const name = el("sess-name").value.trim();
-    const site = el("sess-site").value.trim();
-    const context = el("sess-context").value;
+    const mimeType = pickMimeType();
+    state.recChunks = [];
+    state.recStartTs = new Date().toISOString();
 
-    if (!name || !site) { el("setup-status").textContent = "Enter session name + site label."; return; }
+    try{
+      state.mediaRecorder = new MediaRecorder(state.mediaStream, mimeType ? {mimeType} : undefined);
+    } catch(e){
+      el("capture-status").textContent = "MediaRecorder init failed: " + e;
+      alert("MediaRecorder failed (browser unsupported). Use Chrome on Android.");
+      return;
+    }
 
-    const session = {
-      session_id: crypto.randomUUID(),
-      created_at: new Date().toISOString(),
-      name, site, context,
-      settings: {...state.settings},
-      consent: {...state.consent},
-      device: state.consent.device ? {
-        userAgent: navigator.userAgent,
-        platform: navigator.platform || null
-      } : null,
-      location: null,
-      photo_meta: null,  // Chunk 1 stores metadata only; Chunk 2 can store compressed blob
-      clip_count: 0
+    state.mediaRecorder.ondataavailable = (evt) => {
+      if (evt.data && evt.data.size > 0) state.recChunks.push(evt.data);
     };
 
-    // store in DB
-    try {
-      await idbPut(STORES.sessions, session);
-    } catch (e) {
-      el("setup-status").textContent = "DB error saving session: " + e;
-      return;
-    }
+    state.mediaRecorder.onstop = async () => {
+      clearInterval(state.recStopTimer); state.recStopTimer = null;
 
-    state.session = session;
-    el("setup-status").textContent = "";
-    el("cap-meta").textContent = `${session.site} • ${session.context} • ${session.session_id.slice(0,8)}`;
-    el("capture-status").textContent = "Session created and saved locally. (Chunk 2 adds recording.)";
-    show("capture");
-  };
+      const blob = new Blob(state.recChunks, { type: state.mediaRecorder.mimeType || "audio/webm" });
+      const clip_id = crypto.randomUUID();
 
-  el("btn-end").onclick = () => {
-    state.session = null;
-    show("landing");
-  };
-  el("btn-back-to-sessions").onclick = async () => { show("sessions"); await renderSessions(); };
+      // Clip object (audio stored as blob in IndexedDB)
+      const clip = {
+        clip_id,
+        session_id: state.session.session_id,
+        timestamp: state.recStartTs,
+        duration_s: state.settings.clipLen,
+        mime_type: blob.type,
+        audio_blob: blob,
+        // quick tags from capture screen (apply once)
+        quick_tags: Array.from(state.quickTags),
+        // ratings (to be filled on rating page)
+        pleasantness: null,
+        eventfulness: null,
+        expectedness: "",
+        standout: [],
+      };
 
-  // default
-  show("landing");
-})();
-</script>
+      // save clip
+      await idbPut(STORES.clips, clip);
 
-</body>
-</html>
+      // increment session clip_count (for list page)
+      state.session.clip_count = (state.session.clip_count || 0) + 1;
+      await idbPut(STORES.sessions, state.session);
+
+      await refreshClipCount();
+
+      // prepare rating page
+      state.pendingClip = clip;
+      state.pendingClipUrl = URL.createObjectURL(blob);
+      el("rate-audio").src = state.pendingClipUrl;
+      el("rate-meta").textContent = `${state.session.site} • ${clip.timestamp} • ${Math.round(clip.duration_s)}s`;
+      el("rate-status").textContent = "";
+
+      // reset quick tags for next clip
+      state.quickTags.clear();
+      buildTagButtons("tagButtons", QUICK_TAGS, state.quickTags);
+
+      // reset standout on rating page
+      state.standout.clear();
+      buildTagButtons("standoutButtons", STANDOUT_TAGS, state.standout);
+
+      // reset sli  
