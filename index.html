@@ -1,9 +1,9 @@
-    <!doctype html>
+ <!doctype html>
 <html>
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Soundscape V2 (Offline-first)</title>
+  <title>Soundscape V2 (Chunk 1 - DB)</title>
   <style>
     body{font-family:Arial;margin:16px;max-width:980px}
     .card{border:1px solid #ddd;border-radius:10px;padding:12px;margin:10px 0}
@@ -13,12 +13,16 @@
     .note{font-size:12px;color:#555;line-height:1.35}
     .hidden{display:none}
     .pill{display:inline-block;padding:2px 8px;border:1px solid #ddd;border-radius:999px;font-size:12px}
+    table{border-collapse:collapse;width:100%;font-size:12px}
+    th,td{border:1px solid #ddd;padding:6px}
+    th{background:#f3f3f3;text-align:left}
+    .danger{border-color:#c33}
   </style>
 </head>
 <body>
 
 <h2>Soundscape V2</h2>
-<div class="note">Offline-first capture → ratings → export/upload later.</div>
+<div class="note">Chunk 1: IndexedDB persistence + session list.</div>
 
 <!-- PAGE: landing -->
 <section id="page-landing" class="card">
@@ -35,6 +39,7 @@
   <div class="row">
     <button id="btn-start-session">Start session</button>
     <button id="btn-settings">Settings</button>
+    <button id="btn-sessions">Sessions</button>
   </div>
   <div class="note" id="landing-status"></div>
 </section>
@@ -72,6 +77,19 @@
   <div class="note" id="settings-status"></div>
 </section>
 
+<!-- PAGE: sessions list -->
+<section id="page-sessions" class="card hidden">
+  <h3>Sessions</h3>
+  <div class="note">Stored locally on this device (IndexedDB).</div>
+  <div class="row">
+    <button id="btn-refresh-sessions">Refresh</button>
+    <button id="btn-back-from-sessions">Back</button>
+    <button id="btn-delete-all" class="danger">Delete ALL</button>
+  </div>
+  <div class="row" id="sessions-table"></div>
+  <div class="note" id="sessions-status"></div>
+</section>
+
 <!-- PAGE: setup -->
 <section id="page-setup" class="card hidden">
   <h3>Session setup</h3>
@@ -98,39 +116,214 @@
   <div class="note" id="setup-status"></div>
 </section>
 
-<!-- PAGE: capture (placeholder for now) -->
+<!-- PAGE: capture (placeholder) -->
 <section id="page-capture" class="card hidden">
   <h3>Capture</h3>
-  <div class="note">Next chunk will add mic capture + clip storage + rating screen.</div>
+  <div class="note">Chunk 2 will add mic recording + clip storage + rating flow.</div>
   <div class="row">
     <span class="pill" id="cap-meta">—</span>
   </div>
   <div class="row">
     <button id="btn-end">End session</button>
+    <button id="btn-back-to-sessions">Back to Sessions</button>
   </div>
+  <div class="note" id="capture-status"></div>
 </section>
 
 <script>
 (() => {
-  // ---------- simple router ----------
-  const pages = ["landing","settings","setup","capture"];
+  // ---------------- Router ----------------
+  const pages = ["landing","settings","sessions","setup","capture"];
   const show = (name) => {
     for (const p of pages) document.getElementById(`page-${p}`).classList.add("hidden");
     document.getElementById(`page-${name}`).classList.remove("hidden");
   };
+  const el = (id) => document.getElementById(id);
 
-  // ---------- app state ----------
+  // ---------------- IndexedDB ----------------
+  const DB_NAME = "soundscape_v2";
+  const DB_VER = 1;
+  const STORES = {
+    sessions: "sessions",
+    clips: "clips" // reserved for Chunk 2+
+  };
+
+  function openDB(){
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VER);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(STORES.sessions)) {
+          const s = db.createObjectStore(STORES.sessions, { keyPath: "session_id" });
+          s.createIndex("created_at", "created_at", { unique: false });
+        }
+        if (!db.objectStoreNames.contains(STORES.clips)) {
+          const c = db.createObjectStore(STORES.clips, { keyPath: "clip_id" });
+          c.createIndex("session_id", "session_id", { unique: false });
+          c.createIndex("timestamp", "timestamp", { unique: false });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function idbPut(storeName, value){
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readwrite");
+      tx.objectStore(storeName).put(value);
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+  }
+
+  async function idbGet(storeName, key){
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readonly");
+      const req = tx.objectStore(storeName).get(key);
+      req.onsuccess = () => { db.close(); resolve(req.result || null); };
+      req.onerror = () => { db.close(); reject(req.error); };
+    });
+  }
+
+  async function idbGetAll(storeName){
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readonly");
+      const req = tx.objectStore(storeName).getAll();
+      req.onsuccess = () => { db.close(); resolve(req.result || []); };
+      req.onerror = () => { db.close(); reject(req.error); };
+    });
+  }
+
+  async function idbDelete(storeName, key){
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readwrite");
+      tx.objectStore(storeName).delete(key);
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+  }
+
+  async function idbClear(storeName){
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readwrite");
+      tx.objectStore(storeName).clear();
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+  }
+
+  // ---------------- App state ----------------
   const state = {
     consent: { audio:false, device:true, location:false },
     settings: { clipLen:10, mode:"manual", basic:true, activity:true, spectral:true, oct:false },
-    session: null, // will be created on setup
+    session: null,
   };
 
-  // ---------- UI wiring ----------
-  const el = (id) => document.getElementById(id);
+  // ---------------- Sessions UI ----------------
+  function fmtDate(iso){
+    try { return new Date(iso).toLocaleString(); } catch { return iso; }
+  }
 
+  async function renderSessions(){
+    const box = el("sessions-table");
+    el("sessions-status").textContent = "Loading…";
+    let sessions = [];
+    try {
+      sessions = await idbGetAll(STORES.sessions);
+    } catch (e) {
+      el("sessions-status").textContent = "DB error: " + e;
+      box.innerHTML = "";
+      return;
+    }
+    sessions.sort((a,b) => (b.created_at||"").localeCompare(a.created_at||""));
+
+    if (!sessions.length){
+      box.innerHTML = "<i>No sessions yet.</i>";
+      el("sessions-status").textContent = "";
+      return;
+    }
+
+    const rows = sessions.map(s => `
+      <tr>
+        <td>${fmtDate(s.created_at)}</td>
+        <td>${escapeHtml(s.site||"")}</td>
+        <td>${escapeHtml(s.context||"")}</td>
+        <td>${escapeHtml(s.name||"")}</td>
+        <td><code>${s.session_id.slice(0,8)}</code></td>
+        <td>${(s.clip_count ?? (s.clips ? s.clips.length : 0))}</td>
+        <td>
+          <button data-open="${s.session_id}">Open</button>
+          <button data-del="${s.session_id}">Delete</button>
+        </td>
+      </tr>
+    `).join("");
+
+    box.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Created</th><th>Site</th><th>Context</th><th>Name</th><th>ID</th><th>Clips</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    // wire buttons
+    box.querySelectorAll("button[data-open]").forEach(btn => {
+      btn.onclick = async () => {
+        const id = btn.getAttribute("data-open");
+        const sess = await idbGet(STORES.sessions, id);
+        if (!sess) { el("sessions-status").textContent = "Session not found."; return; }
+        state.session = sess;
+        el("cap-meta").textContent = `${sess.site} • ${sess.context} • ${sess.session_id.slice(0,8)}`;
+        el("capture-status").textContent = "Loaded session (capture features added in Chunk 2).";
+        show("capture");
+      };
+    });
+
+    box.querySelectorAll("button[data-del]").forEach(btn => {
+      btn.onclick = async () => {
+        const id = btn.getAttribute("data-del");
+        if (!confirm("Delete this session?")) return;
+        await idbDelete(STORES.sessions, id);
+        await renderSessions();
+        el("sessions-status").textContent = "Deleted.";
+      };
+    });
+
+    el("sessions-status").textContent = "";
+  }
+
+  function escapeHtml(str){
+    return String(str)
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;")
+      .replaceAll("'","&#039;");
+  }
+
+  // ---------------- UI wiring ----------------
   el("btn-settings").onclick = () => show("settings");
   el("btn-back-landing").onclick = () => show("landing");
+  el("btn-sessions").onclick = async () => { show("sessions"); await renderSessions(); };
+  el("btn-back-from-sessions").onclick = () => show("landing");
+  el("btn-refresh-sessions").onclick = async () => { await renderSessions(); };
+
+  el("btn-delete-all").onclick = async () => {
+    if (!confirm("Delete ALL sessions on this device?")) return;
+    await idbClear(STORES.sessions);
+    await idbClear(STORES.clips);
+    await renderSessions();
+    el("sessions-status").textContent = "All deleted.";
+  };
 
   el("btn-save-settings").onclick = () => {
     state.settings.clipLen = parseInt(el("set-cliplen").value,10);
@@ -164,8 +357,7 @@
 
     if (!name || !site) { el("setup-status").textContent = "Enter session name + site label."; return; }
 
-    // Create a session object (we’ll persist to IndexedDB in the next chunk)
-    state.session = {
+    const session = {
       session_id: crypto.randomUUID(),
       created_at: new Date().toISOString(),
       name, site, context,
@@ -176,15 +368,22 @@
         platform: navigator.platform || null
       } : null,
       location: null,
-      photo: null, // will store compressed blob later
-      clips: []
+      photo_meta: null,  // Chunk 1 stores metadata only; Chunk 2 can store compressed blob
+      clip_count: 0
     };
 
+    // store in DB
+    try {
+      await idbPut(STORES.sessions, session);
+    } catch (e) {
+      el("setup-status").textContent = "DB error saving session: " + e;
+      return;
+    }
+
+    state.session = session;
     el("setup-status").textContent = "";
-
-    // show metadata in capture page
-    el("cap-meta").textContent = `${state.session.site} • ${state.session.context} • ${state.session.session_id.slice(0,8)}`;
-
+    el("cap-meta").textContent = `${session.site} • ${session.context} • ${session.session_id.slice(0,8)}`;
+    el("capture-status").textContent = "Session created and saved locally. (Chunk 2 adds recording.)";
     show("capture");
   };
 
@@ -192,6 +391,7 @@
     state.session = null;
     show("landing");
   };
+  el("btn-back-to-sessions").onclick = async () => { show("sessions"); await renderSessions(); };
 
   // default
   show("landing");
@@ -199,4 +399,4 @@
 </script>
 
 </body>
-    </html>
+</html>
