@@ -1,0 +1,1513 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Soundscape V2 (Chunk 3b - Predictor + Data Capture + Mini-log)</title>
+  <style>
+    body{font-family:Arial;margin:16px;max-width:1150px}
+    .card{border:1px solid #ddd;border-radius:10px;padding:12px;margin:10px 0}
+    .row{margin:10px 0}
+    button{padding:12px 14px;margin:6px 6px 0 0;font-size:15px}
+    input,select{padding:8px;font-size:15px}
+    .note{font-size:12px;color:#555;line-height:1.35}
+    .hidden{display:none}
+    .pill{display:inline-block;padding:2px 8px;border:1px solid #ddd;border-radius:999px;font-size:12px;margin-left:6px}
+    table{border-collapse:collapse;width:100%;font-size:12px}
+    th,td{border:1px solid #ddd;padding:6px;vertical-align:top}
+    th{background:#f3f3f3;text-align:left}
+    .danger{border-color:#c33}
+    .warn{color:#8a0000;font-weight:700}
+    .big{font-size:18px;font-weight:700}
+    .meter{height:12px;background:#eee;border:1px solid #ccc;border-radius:6px;overflow:hidden}
+    .bar{height:100%;width:0%;background:#333}
+    .tagbtn{padding:10px 10px;font-size:14px}
+    .tagbtn.on{outline:2px solid #333}
+    .slider{width: 360px; max-width: 92%}
+    .ok{color:#0b6b2b;font-weight:700}
+    .grid{display:grid;grid-template-columns:1fr;gap:10px}
+    @media(min-width:980px){.grid{grid-template-columns:1fr 1fr}}
+    canvas{border:1px solid #ddd;border-radius:10px}
+    .kpi{display:flex;gap:12px;flex-wrap:wrap}
+    .kpi .card2{border:1px solid #eee;border-radius:10px;padding:10px;min-width:180px}
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
+  </style>
+</head>
+<body>
+
+<h2>Soundscape V2</h2>
+<div class="note">
+  Chunk 3b: robust feature vector (12–15) + beta predictor (P/E) + user ratings + mini-log sampling + export.
+  <span class="pill" id="secure-pill">…</span>
+</div>
+
+<section id="page-landing" class="card">
+  <h3>Consent</h3>
+  <div class="row">
+    <label><input type="checkbox" id="c-audio"> I consent to recording short audio clips</label>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="c-device" checked> Store device/browser info (recommended)</label>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="c-location"> Store location (optional; not implemented)</label>
+  </div>
+  <div class="row">
+    <button id="btn-start-session">Start session</button>
+    <button id="btn-settings">Settings</button>
+    <button id="btn-sessions">Sessions</button>
+  </div>
+  <div class="note" id="landing-status"></div>
+</section>
+
+<section id="page-settings" class="card hidden">
+  <h3>Settings</h3>
+
+  <div class="row">
+    Clip length:
+    <select id="set-cliplen">
+      <option value="5">5s</option>
+      <option value="10" selected>10s</option>
+      <option value="15">15s</option>
+    </select>
+  </div>
+
+  <div class="row">
+    Feature detail:
+    <select id="set-detail">
+      <option value="fast" selected>Fast (recommended)</option>
+      <option value="full">Full (slower: more FFT frames)</option>
+    </select>
+    <span class="note">Fast is usually enough for logging + prediction.</span>
+  </div>
+
+  <div class="row">
+    Mini-log duration:
+    <select id="set-logmins">
+      <option value="5" selected>5 min</option>
+      <option value="15">15 min</option>
+      <option value="30">30 min</option>
+      <option value="60">60 min</option>
+    </select>
+    Interval:
+    <select id="set-loginterval">
+      <option value="60" selected>60 s</option>
+      <option value="30">30 s</option>
+      <option value="120">120 s</option>
+    </select>
+    <label style="margin-left:10px"><input type="checkbox" id="set-rate-each"> Prompt rating after each sample</label>
+  </div>
+
+  <div class="row">
+    <button id="btn-save-settings">Save</button>
+    <button id="btn-back-landing">Back</button>
+  </div>
+  <div class="note" id="settings-status"></div>
+</section>
+
+<section id="page-sessions" class="card hidden">
+  <h3>Sessions</h3>
+  <div class="note">Stored locally on this device (IndexedDB). Audio clips are saved locally too. Export outputs CSV+JSON (no audio export yet).</div>
+  <div class="row">
+    <button id="btn-refresh-sessions">Refresh</button>
+    <button id="btn-back-from-sessions">Back</button>
+    <button id="btn-delete-all" class="danger">Delete ALL</button>
+  </div>
+  <div class="row" id="sessions-table"></div>
+  <div class="note" id="sessions-status"></div>
+</section>
+
+<section id="page-setup" class="card hidden">
+  <h3>Session setup</h3>
+
+  <div class="grid">
+    <div class="card">
+      <div class="row">
+        Session name: <input id="sess-name" placeholder="e.g. Brixton AM run" style="width:340px"/>
+      </div>
+      <div class="row">
+        Site label: <input id="sess-site" placeholder="e.g. Brixton Station Rd" style="width:340px"/>
+      </div>
+      <div class="row">
+        Context:
+        <select id="sess-context">
+          <option>Street</option><option>Park</option><option>Square</option><option>Office</option>
+          <option>Cafe</option><option>Transit</option><option>Residential</option><option>Other</option>
+        </select>
+      </div>
+      <div class="row">
+        <button id="btn-begin">Begin capture</button>
+        <button id="btn-cancel-setup">Cancel</button>
+      </div>
+      <div class="note" id="setup-status"></div>
+    </div>
+
+    <div class="card">
+      <h4 style="margin:0 0 8px">Optional participant profile (helps modelling)</h4>
+      <div class="row">
+        Age band:
+        <select id="pf-age">
+          <option value="">Prefer not</option>
+          <option value="<18">&lt;18</option>
+          <option value="18-34">18–34</option>
+          <option value="35-54">35–54</option>
+          <option value="55+">55+</option>
+        </select>
+      </div>
+      <div class="row">
+        Noise sensitivity (1–5):
+        <select id="pf-sens">
+          <option value="">Prefer not</option>
+          <option value="1">1 (low)</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="5">5 (high)</option>
+        </select>
+      </div>
+      <div class="row">
+        Purpose:
+        <select id="pf-purpose">
+          <option value="">Prefer not</option>
+          <option value="living">Living</option>
+          <option value="working">Working</option>
+          <option value="relaxing">Relaxing</option>
+          <option value="travelling">Travelling</option>
+        </select>
+      </div>
+      <div class="note">Stored with session metadata only.</div>
+    </div>
+  </div>
+</section>
+
+<section id="page-capture" class="card hidden">
+  <div class="row" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+    <div>
+      <h3 style="margin:0">Capture</h3>
+      <div class="note">
+        <span class="pill" id="cap-meta">—</span>
+        <span class="pill" id="cap-count">Clips: 0</span>
+        <span class="pill" id="cap-mode">Snapshot</span>
+      </div>
+    </div>
+    <div>
+      <button id="btn-summary">Summary</button>
+      <button id="btn-clips">Clips</button>
+      <button id="btn-back-to-sessions">Sessions</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <span class="big" id="cap-state">Ready</span>
+    <span class="pill" id="cap-timer">—</span>
+  </div>
+
+  <div class="row meter"><div id="live-bar" class="bar"></div></div>
+  <div class="row note warn" id="secureNote" style="display:none">
+    Microphone requires HTTPS (or localhost). Use your GitHub Pages https:// URL.
+  </div>
+
+  <div class="row">
+    <button id="btn-record">Record snapshot</button>
+    <button id="btn-minilog">Start mini-log</button>
+    <button id="btn-stoplog" disabled class="danger">Stop log</button>
+    <button id="btn-end" class="danger">End session</button>
+  </div>
+
+  <div class="row note">Quick tags (optional, applied to next saved clip):</div>
+  <div class="row" id="tagButtons"></div>
+
+  <div class="note" id="capture-status"></div>
+</section>
+
+<section id="page-rate" class="card hidden">
+  <h3>Clip result</h3>
+  <div class="row">
+    <span class="pill" id="rate-meta">—</span>
+    <span class="pill" id="rate-suggest">Suggested: —</span>
+    <span class="pill" id="rate-pred">Predicted P/E: —</span>
+    <span class="pill" id="rate-conf">Confidence: —</span>
+  </div>
+
+  <div class="row">
+    <audio id="rate-audio" controls style="width:100%"></audio>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h4 style="margin:0 0 8px">Your perception (optional but valuable)</h4>
+      <div class="row">
+        Pleasantness: <b id="p-val">50</b>/100<br/>
+        <input id="p-slider" class="slider" type="range" min="0" max="100" value="50"/>
+      </div>
+      <div class="row">
+        Eventfulness: <b id="e-val">50</b>/100<br/>
+        <input id="e-slider" class="slider" type="range" min="0" max="100" value="50"/>
+      </div>
+      <div class="row">
+        Expected/normal here?
+        <select id="expected">
+          <option value="">(skip)</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="card">
+      <h4 style="margin:0 0 8px">Source notes</h4>
+      <div class="row">What stood out? (optional)</div>
+      <div class="row" id="standoutButtons"></div>
+      <div class="row note">
+        Predictor is <b>beta</b>. Your ratings are the ground truth. The dataset builds a future “soundscape weighting function” analogous to A‑weighting.
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <button id="btn-save-rating">Save rating</button>
+    <button id="btn-skip-rating">Skip</button>
+    <button id="btn-discard-clip" class="danger">Discard clip</button>
+  </div>
+
+  <div class="card">
+    <h4 style="margin:0 0 8px">Feature vector (proxy)</h4>
+    <div class="note mono" id="feat-box">—</div>
+  </div>
+
+  <div class="note" id="rate-status"></div>
+</section>
+
+<section id="page-clips" class="card hidden">
+  <div class="row" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+    <div>
+      <h3 style="margin:0">Clips</h3>
+      <div class="note"><span class="pill" id="clips-meta">—</span></div>
+    </div>
+    <div>
+      <button id="btn-back-capture-from-clips">Back</button>
+      <button id="btn-export">Export CSV/JSON</button>
+    </div>
+  </div>
+  <div class="row" id="clips-table"></div>
+  <div class="note" id="clips-status"></div>
+</section>
+
+<section id="page-summary" class="card hidden">
+  <div class="row" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+    <div>
+      <h3 style="margin:0">Session summary</h3>
+      <div class="note"><span class="pill" id="sum-meta">—</span></div>
+    </div>
+    <div>
+      <button id="btn-back-capture-from-summary">Back</button>
+      <button id="btn-export2">Export CSV/JSON</button>
+    </div>
+  </div>
+
+  <div class="kpi" id="kpi"></div>
+
+  <div class="grid">
+    <div class="card">
+      <h4 style="margin:0 0 8px">Pleasantness vs Eventfulness (your ratings)</h4>
+      <canvas id="scatter" width="520" height="360"></canvas>
+      <div class="note">Each dot is one clip (rated only).</div>
+    </div>
+    <div class="card">
+      <h4 style="margin:0 0 8px">Predicted P/E (all clips)</h4>
+      <canvas id="predscatter" width="520" height="360"></canvas>
+      <div class="note">Each dot is one clip (prediction only). Use as a trend, not truth.</div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h4 style="margin:0 0 8px">Top “stood out” tags</h4>
+      <div id="tag-summary"></div>
+    </div>
+    <div class="card">
+      <h4 style="margin:0 0 8px">Recent predicted log table</h4>
+      <div id="log-table"></div>
+      <div class="note">Mini-log = repeated 10s samples at an interval.</div>
+    </div>
+  </div>
+
+  <div class="note" id="sum-status"></div>
+</section>
+
+<script>
+(() => {
+  const pages = ["landing","settings","sessions","setup","capture","rate","clips","summary"];
+  const show = (name) => {
+    pages.forEach(p => document.getElementById(`page-${p}`).classList.add("hidden"));
+    document.getElementById(`page-${name}`).classList.remove("hidden");
+  };
+  const el = (id) => document.getElementById(id);
+  const secureOk = () => (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1");
+
+  const DB_NAME = "soundscape_v2";
+  const DB_VER = 1;
+  const STORES = { sessions:"sessions", clips:"clips" };
+
+  function openDB(){
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VER);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(STORES.sessions)) {
+          const s = db.createObjectStore(STORES.sessions, { keyPath: "session_id" });
+          s.createIndex("created_at", "created_at", { unique:false });
+        }
+        if (!db.objectStoreNames.contains(STORES.clips)) {
+          const c = db.createObjectStore(STORES.clips, { keyPath: "clip_id" });
+          c.createIndex("session_id", "session_id", { unique:false });
+          c.createIndex("timestamp", "timestamp", { unique:false });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function idbPut(storeName, value){
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readwrite");
+      tx.objectStore(storeName).put(value);
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+  }
+  async function idbGet(storeName, key){
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readonly");
+      const req = tx.objectStore(storeName).get(key);
+      req.onsuccess = () => { db.close(); resolve(req.result || null); };
+      req.onerror = () => { db.close(); reject(req.error); };
+    });
+  }
+  async function idbGetAll(storeName){
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readonly");
+      const req = tx.objectStore(storeName).getAll();
+      req.onsuccess = () => { db.close(); resolve(req.result || []); };
+      req.onerror = () => { db.close(); reject(req.error); };
+    });
+  }
+  async function idbDelete(storeName, key){
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readwrite");
+      tx.objectStore(storeName).delete(key);
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+  }
+  async function idbClear(storeName){
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readwrite");
+      tx.objectStore(storeName).clear();
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+  }
+  async function idbGetClipsForSession(session_id){
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORES.clips, "readonly");
+      const idx = tx.objectStore(STORES.clips).index("session_id");
+      const req = idx.getAll(session_id);
+      req.onsuccess = () => { db.close(); resolve(req.result || []); };
+      req.onerror = () => { db.close(); reject(req.error); };
+    });
+  }
+
+  function escapeHtml(str){
+    return String(str).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;").replaceAll("'","&#039;");
+  }
+  function fmtDate(iso){
+    try { return new Date(iso).toLocaleString(); } catch { return iso; }
+  }
+  function mean(arr){ if(!arr.length) return 0; return arr.reduce((a,b)=>a+b,0)/arr.length; }
+  function percentile(sorted, p){
+    if(!sorted.length) return 0;
+    const idx = (sorted.length-1)*p;
+    const lo = Math.floor(idx), hi = Math.ceil(idx);
+    if (lo === hi) return sorted[lo];
+    const w = idx-lo;
+    return sorted[lo]*(1-w) + sorted[hi]*w;
+  }
+  function clamp01(x){ return Math.max(0, Math.min(1, x)); }
+
+  const state = {
+    consent: { audio:false, device:true, location:false },
+    settings: { clipLen:10, detail:"fast", logMins:5, logIntervalS:60, rateEach:false },
+    session: null,
+    mediaStream: null,
+    liveCtx: null,
+    liveAnalyser: null,
+    liveRAF: null,
+    quickTags: new Set(),
+    standout: new Set(),
+    pendingClip: null,
+    pendingClipUrl: null,
+    isLogging: false,
+    logStopRequested: false
+  };
+
+  const QUICK_TAGS = [
+    "Voices","Traffic","Birds","Wind/Foliage","Water",
+    "Mechanical/Plant","HVAC/Extractor","Construction",
+    "Music","Siren/Alarm","Train","Plane","Revving/Acceleration","Other"
+  ];
+  const STANDOUT_TAGS = [
+    "Voices","Shouting","Laughter",
+    "Traffic steady","Traffic revving","Revving/Acceleration",
+    "Mechanical/Plant","HVAC/Extractor",
+    "Train","Plane",
+    "Siren/Alarm","Construction","Music",
+    "Birds","Wind/Foliage","Water","Other"
+  ];
+
+  function buildTagButtons(containerId, tags, setRef){
+    const wrap = el(containerId);
+    wrap.innerHTML = "";
+    tags.forEach(t => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "tagbtn";
+      b.textContent = t;
+      b.addEventListener("click", () => {
+        if (setRef.has(t)) { setRef.delete(t); b.classList.remove("on"); }
+        else { setRef.add(t); b.classList.add("on"); }
+      });
+      wrap.appendChild(b);
+    });
+  }
+
+  function startLiveMeter(stream){
+    stopLiveMeter();
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    state.liveCtx = new AudioCtx();
+    const src = state.liveCtx.createMediaStreamSource(stream);
+    state.liveAnalyser = state.liveCtx.createAnalyser();
+    state.liveAnalyser.fftSize = 1024;
+    src.connect(state.liveAnalyser);
+
+    let display = -70;
+    const td = new Float32Array(state.liveAnalyser.fftSize);
+
+    const loop = () => {
+      state.liveAnalyser.getFloatTimeDomainData(td);
+      let ss=0;
+      for (let i=0;i<td.length;i++) ss += td[i]*td[i];
+      const rms = Math.sqrt(ss / td.length);
+      const db = 20*Math.log10(rms + 1e-12);
+      display = display*0.9 + db*0.1;
+      const pct = Math.max(0, Math.min(100, (display + 80)*1.25));
+      el("live-bar").style.width = pct + "%";
+      state.liveRAF = requestAnimationFrame(loop);
+    };
+    state.liveRAF = requestAnimationFrame(loop);
+  }
+  function stopLiveMeter(){
+    if (state.liveRAF) cancelAnimationFrame(state.liveRAF);
+    state.liveRAF = null;
+    if (state.liveCtx) state.liveCtx.close().catch(()=>{});
+    state.liveCtx = null;
+    state.liveAnalyser = null;
+    el("live-bar").style.width = "0%";
+  }
+
+  function pickMimeType(){
+    const prefs = ["audio/webm;codecs=opus","audio/webm","audio/ogg;codecs=opus","audio/ogg","audio/mp4"];
+    for (const m of prefs){
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) return m;
+    }
+    return "";
+  }
+
+  async function ensureMic(){
+    if (state.mediaStream) return state.mediaStream;
+    if (!secureOk()){
+      el("secureNote").style.display = "block";
+      throw new Error("Not HTTPS. Use GitHub Pages https:// URL.");
+    }
+    el("secureNote").style.display = "none";
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    state.mediaStream = stream;
+    startLiveMeter(stream);
+    return stream;
+  }
+
+  // FFT
+  function fftRadix2ReIm(re, im){
+    const n = re.length;
+    let j=0;
+    for (let i=1;i<n;i++){
+      let bit = n >> 1;
+      while (j & bit){ j ^= bit; bit >>= 1; }
+      j ^= bit;
+      if (i < j){
+        [re[i], re[j]] = [re[j], re[i]];
+        [im[i], im[j]] = [im[j], im[i]];
+      }
+    }
+    for (let len=2; len<=n; len<<=1){
+      const ang = -2*Math.PI/len;
+      const wlenRe = Math.cos(ang);
+      const wlenIm = Math.sin(ang);
+      for (let i=0; i<n; i+=len){
+        let wRe=1, wIm=0;
+        for (let k=0; k<len/2; k++){
+          const uRe = re[i+k], uIm = im[i+k];
+          const vRe = re[i+k+len/2]*wRe - im[i+k+len/2]*wIm;
+          const vIm = re[i+k+len/2]*wIm + im[i+k+len/2]*wRe;
+          re[i+k] = uRe + vRe;
+          im[i+k] = uIm + vIm;
+          re[i+k+len/2] = uRe - vRe;
+          im[i+k+len/2] = uIm - vIm;
+          const nextWRe = wRe*wlenRe - wIm*wlenIm;
+          const nextWIm = wRe*wlenIm + wIm*wlenRe;
+          wRe = nextWRe; wIm = nextWIm;
+        }
+      }
+    }
+  }
+  function hann(n, i){ return 0.5*(1 - Math.cos(2*Math.PI*i/(n-1))); }
+
+  async function extractFeaturesFromBlob(blob, detail){
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AudioCtx();
+    const ab = await blob.arrayBuffer();
+    const audioBuf = await ctx.decodeAudioData(ab.slice(0));
+    await ctx.close();
+
+    const sr = audioBuf.sampleRate;
+    const ch = audioBuf.getChannelData(0);
+    const n = ch.length;
+
+    // LAeq proxy
+    let sumSq = 0;
+    for (let i=0;i<n;i++){ const v=ch[i]; sumSq += v*v; }
+    const rms = Math.sqrt(sumSq / n);
+    const laeq_db = 20*Math.log10(rms + 1e-12);
+
+    // Lmax proxy 100ms
+    const win100ms = Math.max(1, Math.floor(sr*0.1));
+    let maxWinRms = 0;
+    for (let i=0;i+win100ms<=n;i+=win100ms){
+      let ss=0;
+      for (let k=0;k<win100ms;k++){ const v=ch[i+k]; ss += v*v; }
+      const wrms = Math.sqrt(ss / win100ms);
+      if (wrms > maxWinRms) maxWinRms = wrms;
+    }
+    const lmax_db = 20*Math.log10(maxWinRms + 1e-12);
+    const crest_db = lmax_db - laeq_db;
+
+    // 1s levels: L10/L90 + skew
+    const secLen = Math.max(1, Math.floor(sr*1.0));
+    const levels = [];
+    for (let i=0;i+secLen<=n;i+=secLen){
+      let ss=0;
+      for (let k=0;k<secLen;k++){ const v=ch[i+k]; ss += v*v; }
+      const rr = Math.sqrt(ss/secLen);
+      levels.push(20*Math.log10(rr + 1e-12));
+    }
+    const sorted = levels.slice().sort((a,b)=>a-b);
+    const l10 = percentile(sorted, 0.90);
+    const l90 = percentile(sorted, 0.10);
+    const l10_l90 = l10 - l90;
+
+    let skew = 0;
+    if (levels.length >= 3){
+      const mu = mean(levels);
+      let m2=0, m3=0;
+      for (const x of levels){
+        const d = x - mu;
+        m2 += d*d;
+        m3 += d*d*d;
+      }
+      m2 /= levels.length;
+      m3 /= levels.length;
+      const s = Math.sqrt(m2) + 1e-12;
+      skew = (m3 / (s*s*s));
+    }
+
+    // Envelope at 100 Hz: modulation + onset rate
+    const envFs = 100;
+    const step = Math.max(1, Math.floor(sr/envFs));
+    const env = new Float32Array(Math.floor(n/step));
+    for (let i=0, j=0; i<n; i+=step, j++){
+      env[j] = Math.abs(ch[i]);
+    }
+    // moving average 50ms
+    const ma = new Float32Array(env.length);
+    const w = 5;
+    let run=0;
+    for (let i=0;i<env.length;i++){
+      run += env[i];
+      if (i>=w) run -= env[i-w];
+      ma[i] = run / Math.min(i+1,w);
+    }
+    const envMean = mean(Array.from(ma));
+    let envVar=0;
+    for (let i=0;i<ma.length;i++){ const d = ma[i]-envMean; envVar += d*d; }
+    envVar /= (ma.length || 1);
+    const envStd = Math.sqrt(envVar);
+    const modulation_depth = clamp01(envStd / (envMean + 1e-12));
+
+    const jumps = [];
+    for (let i=1;i<ma.length;i++) jumps.push(ma[i]-ma[i-1]);
+    const js = jumps.slice().sort((a,b)=>a-b);
+    const medJump = js.length ? percentile(js, 0.5) : 0;
+    const thr = medJump + 3*(Math.abs(medJump) + 1e-4);
+    let onsetCount = 0;
+    for (let i=0;i<jumps.length;i++) if (jumps[i] > thr) onsetCount++;
+    const onset_rate_hz = (ma.length>1) ? (onsetCount / (ma.length/envFs)) : 0;
+
+    // Spectral features
+    const NFFT = 1024;
+    const HOP = (detail === "full") ? 256 : 512;
+    const maxFrames = (detail === "full") ? 140 : 70;
+    const nyq = sr/2;
+    const binHz = nyq / (NFFT/2);
+
+    let frameCount = 0;
+    let centroidSum = 0, centroidVarAcc = 0;
+    let flatSum = 0;
+    let fluxSum = 0;
+    let lowSum = 0, midSum = 0, highSum = 0;
+    let peakinessSum = 0;
+    let prevMag = null;
+
+    for (let start=0; start+NFFT<=n && frameCount<maxFrames; start+=HOP){
+      const re = new Array(NFFT);
+      const im = new Array(NFFT).fill(0);
+      for (let i=0;i<NFFT;i++) re[i] = ch[start+i] * hann(NFFT, i);
+      fftRadix2ReIm(re, im);
+
+      const mag = new Float32Array(NFFT/2);
+      let den = 0, num = 0;
+      let logSum = 0, arSum = 0;
+      let mx = 0;
+
+      for (let i=0;i<NFFT/2;i++){
+        const rr = re[i], ii = im[i];
+        const v = Math.sqrt(rr*rr + ii*ii) + 1e-12;
+        mag[i] = v;
+        const hz = i * binHz;
+        num += hz * v;
+        den += v;
+        logSum += Math.log(v);
+        arSum += v;
+        if (v > mx) mx = v;
+
+        if (hz < 250) lowSum += v;
+        else if (hz < 2000) midSum += v;
+        else highSum += v;
+      }
+
+      const centroid = den>0 ? (num/den) : 0;
+      const geo = Math.exp(logSum/(NFFT/2));
+      const ar = arSum/(NFFT/2);
+      const flat = ar>0 ? (geo/ar) : 0;
+      const peakiness = (arSum>0) ? (mx / (arSum/(NFFT/2))) : 0;
+
+      centroidSum += centroid;
+      centroidVarAcc += centroid*centroid;
+      flatSum += flat;
+      peakinessSum += peakiness;
+
+      if (prevMag){
+        let fs = 0;
+        for (let i=0;i<mag.length;i++){
+          const d = mag[i] - prevMag[i];
+          if (d > 0) fs += d;
+        }
+        fluxSum += fs;
+      }
+      prevMag = mag;
+      frameCount++;
+    }
+
+    const centroidMean = frameCount ? centroidSum/frameCount : 0;
+    const centroidVar = frameCount ? (centroidVarAcc/frameCount - centroidMean*centroidMean) : 0;
+    const stationarity = clamp01(1 - Math.sqrt(Math.max(0,centroidVar)) / 2000);
+    const flatMean = frameCount ? flatSum/frameCount : 0;
+    const peakinessMean = frameCount ? peakinessSum/frameCount : 0;
+    const fluxMean = frameCount>1 ? fluxSum/(frameCount-1) : 0;
+    const fluxNorm = Math.min(1, fluxMean / 50.0);
+
+    const bandTot = lowSum + midSum + highSum;
+    const lowPct = bandTot>0 ? lowSum/bandTot : 0;
+    const midPct = bandTot>0 ? midSum/bandTot : 0;
+    const highPct = bandTot>0 ? highSum/bandTot : 0;
+
+    let rolloff85 = 0;
+    if (prevMag){
+      let tot = 0;
+      for (let i=0;i<prevMag.length;i++) tot += prevMag[i];
+      let cum = 0;
+      const target = 0.85*tot;
+      for (let i=0;i<prevMag.length;i++){
+        cum += prevMag[i];
+        if (cum >= target){ rolloff85 = i*binHz; break; }
+      }
+    }
+
+    // Harmonicity proxy by autocorr peak (rough)
+    const targetSr = 8000;
+    const ds = Math.max(1, Math.floor(sr/targetSr));
+    const m = Math.min(8000, Math.floor(n/ds));
+    let harm = 0;
+    if (m > 2000){
+      const x = new Float32Array(m);
+      for (let i=0;i<m;i++) x[i] = ch[i*ds];
+      let xs=0;
+      for (let i=0;i<m;i++) xs += x[i]*x[i];
+      const xrms = Math.sqrt(xs/m) + 1e-12;
+      for (let i=0;i<m;i++) x[i] /= xrms;
+
+      const minLag = Math.floor(targetSr/400);
+      const maxLag = Math.floor(targetSr/80);
+      let best = 0;
+      for (let lag=minLag; lag<=maxLag; lag+=2){
+        let s=0;
+        for (let i=0;i<m-lag;i++) s += x[i]*x[i+lag];
+        s /= (m-lag);
+        if (s > best) best = s;
+      }
+      harm = clamp01(best);
+    }
+
+    return {
+      sr,
+      laeq_proxy_db: laeq_db,
+      lmax_proxy_db: lmax_db,
+      crest_db,
+      l10_proxy_db: l10,
+      l90_proxy_db: l90,
+      l10_l90_range_db: l10_l90,
+      level_skewness_1s: skew,
+      modulation_depth,
+      onset_rate_hz,
+      spectral_flux_norm: fluxNorm,
+      stationarity_index: stationarity,
+      centroid_hz_mean: centroidMean,
+      rolloff85_hz: rolloff85,
+      flatness_mean: flatMean,
+      low_pct: lowPct,
+      mid_pct: midPct,
+      high_pct: highPct,
+      tonal_peakiness: peakinessMean,
+      harmonicity_proxy: harm
+    };
+  }
+
+  function suggestSourcesBedEvents(f){
+    const flux = f.spectral_flux_norm ?? 0;
+    const flat = clamp01(f.flatness_mean ?? 0);
+    const tonal = clamp01(((f.tonal_peakiness ?? 1) - 1) / 4);
+    const low = f.low_pct ?? 0;
+    const mid = f.mid_pct ?? 0;
+    const high = f.high_pct ?? 0;
+    const crest = clamp01(((f.crest_db ?? 0) - 6) / 18);
+    const varr = clamp01(((f.l10_l90_range_db ?? 0) - 2) / 10);
+    const mod = clamp01(f.modulation_depth ?? 0);
+    const onsets = clamp01((f.onset_rate_hz ?? 0) / 8.0);
+    const harm = clamp01(f.harmonicity_proxy ?? 0);
+
+    let traffic = 0.55 + 0.35*low + 0.10*mid + 0.20*flat + 0.10*(1-flux) + 0.10*(1-crest) + 0.10*(1-onsets);
+    let wind = 0.20 + 0.45*flat + 0.35*high + 0.15*(1-tonal) + 0.10*(1-harm) + 0.10*(1-onsets) + 0.10*(1-crest);
+    let water = 0.10 + 0.25*flat + 0.20*mid + 0.25*high + 0.20*flux + 0.10*(1-tonal);
+    let plant = 0.15 + 0.35*low + 0.25*mid + 0.35*tonal + 0.20*(1-flux) + 0.10*(1-onsets);
+
+    const bedScores = [
+      ["Traffic", Math.max(0.01, traffic)],
+      ["Wind/Foliage", Math.max(0.01, wind)],
+      ["Water", Math.max(0.01, water)],
+      ["Mechanical/Plant", Math.max(0.01, plant)]
+    ];
+    const bedSum = bedScores.reduce((a,b)=>a+b[1],0);
+    const bed = bedScores.map(([k,v])=>[k, 100*v/bedSum]);
+
+    let birds = 0.6*high + 0.6*flux + 0.5*onsets - 0.2*low;
+    let voices = 0.6*mid + 0.5*mod + 0.4*harm + 0.3*onsets - 0.2*low;
+    let constr = 0.6*onsets + 0.5*crest + 0.4*flux + 0.2*mid;
+    let music = 0.5*harm + 0.4*tonal + 0.3*mid + 0.3*high + 0.2*mod;
+    let train = 0.5*low + 0.2*flux + 0.3*varr + 0.2*crest;
+    let plane = 0.45*low + 0.15*high + 0.2*flux + 0.25*varr;
+    let sirenGate = (tonal > 0.55 && mod > 0.35 && crest > 0.35 && high > 0.25) ? 1 : 0;
+    let siren = sirenGate ? (0.9*tonal + 0.6*mod + 0.5*crest + 0.3*high) : 0.0;
+    let rev = 0.5*tonal + 0.5*crest + 0.35*low + 0.25*mid + 0.35*onsets;
+
+    const eventsRaw = [
+      ["Birds", birds],["Voices", voices],["Construction", constr],["Music", music],
+      ["Train", train],["Plane", plane],["Siren/Alarm", siren],["Revving/Acceleration", rev]
+    ].map(([k,v])=>[k, Math.max(0, v)]);
+
+    const events = eventsRaw
+      .filter(([k,v]) => v > 0.55 || (k==="Siren/Alarm" && v>0))
+      .sort((a,b)=>b[1]-a[1])
+      .slice(0,5);
+
+    const eSum = events.reduce((a,b)=>a+b[1],0) || 1;
+    const eventsPct = events.map(([k,v])=>[k, 100*v/eSum]);
+    return { bed, events: eventsPct };
+  }
+
+  function formatMix(mix){
+    const topBed = mix.bed.slice(0,2).map(x=>`${x[0]} ${x[1].toFixed(0)}%`).join(" | ");
+    const topEv = mix.events.length ? ("; Events: " + mix.events.slice(0,2).map(x=>`${x[0]} ${x[1].toFixed(0)}%`).join(" | ")) : "";
+    return topBed + topEv;
+  }
+
+  function predictPE(f, mix, profile){
+    const loud = f.laeq_proxy_db;
+    const loudNorm = clamp01((loud + 50) / 40);
+
+    const flux = clamp01(f.spectral_flux_norm ?? 0);
+    const onsets = clamp01((f.onset_rate_hz ?? 0) / 8.0);
+    const crest = clamp01(((f.crest_db ?? 0) - 6) / 18);
+    const varr = clamp01(((f.l10_l90_range_db ?? 0) - 2) / 10);
+    const high = clamp01(f.high_pct ?? 0);
+    const tonal = clamp01(((f.tonal_peakiness ?? 1) - 1) / 4);
+    const mod = clamp01(f.modulation_depth ?? 0);
+    const flat = clamp01(f.flatness_mean ?? 0);
+    const station = clamp01(f.stationarity_index ?? 0);
+
+    const traffic = (mix.bed.find(x=>x[0]==="Traffic")?.[1] ?? 0) / 100;
+    const wind = (mix.bed.find(x=>x[0]==="Wind/Foliage")?.[1] ?? 0) / 100;
+    const water = (mix.bed.find(x=>x[0]==="Water")?.[1] ?? 0) / 100;
+    const plant = (mix.bed.find(x=>x[0]==="Mechanical/Plant")?.[1] ?? 0) / 100;
+
+    const hasSiren = mix.events.some(x=>x[0]==="Siren/Alarm");
+    const hasBirds = mix.events.some(x=>x[0]==="Birds");
+    const hasVoices = mix.events.some(x=>x[0]==="Voices");
+
+    let ev = 0.55*flux + 0.45*onsets + 0.25*mod + 0.25*varr + 0.20*crest + 0.10*high - 0.20*station;
+    ev = clamp01(ev);
+
+    let pl = 0.35*(1 - loudNorm) + 0.15*station + 0.10*(1 - high) + 0.10*(1 - tonal) + 0.10*(1 - mod);
+    pl += 0.15*water + 0.10*wind;
+    pl -= 0.18*traffic + 0.12*plant;
+    if (hasBirds) pl += 0.08;
+    if (hasSiren) pl -= 0.20;
+    if (hasVoices) pl += 0.02;
+    pl = clamp01(pl);
+
+    const sens = parseInt(profile?.noise_sensitivity || "", 10);
+    if (sens){
+      const s = (sens-1)/4;
+      pl -= 0.10*s*loudNorm + 0.08*s*tonal + 0.08*s*traffic;
+      ev += 0.05*s*onsets;
+      pl = clamp01(pl); ev = clamp01(ev);
+    }
+    const age = profile?.age_band || "";
+    if (age === "<18"){ pl += 0.05*ev; pl = clamp01(pl); }
+    const purpose = profile?.purpose || "";
+    if (purpose === "working"){ pl -= 0.10*ev; pl = clamp01(pl); }
+    else if (purpose === "relaxing"){ pl += 0.08*(1-ev); pl = clamp01(pl); }
+    else if (purpose === "travelling"){ pl += 0.06*traffic; pl = clamp01(pl); }
+
+    let conf = 0.55 + 0.20*flux + 0.15*onsets + 0.10*crest - 0.15*(flat>0.7 && flux<0.1 ? 1 : 0);
+    conf = clamp01(conf);
+    const confLabel = conf > 0.75 ? "High" : (conf > 0.55 ? "Medium" : "Low");
+
+    return { pleasant_pred: Math.round(pl*100), eventful_pred: Math.round(ev*100), confidence: confLabel, confidence_score: conf };
+  }
+
+  async function renderSessions(){
+    const box = el("sessions-table");
+    el("sessions-status").textContent = "Loading…";
+    let sessions = [];
+    try { sessions = await idbGetAll(STORES.sessions); }
+    catch(e){ el("sessions-status").textContent = "DB error: " + e; box.innerHTML=""; return; }
+    sessions.sort((a,b) => (b.created_at||"").localeCompare(a.created_at||""));
+    if (!sessions.length){
+      box.innerHTML = "<i>No sessions yet.</i>";
+      el("sessions-status").textContent = "";
+      return;
+    }
+
+    const rows = sessions.map(s => `
+      <tr>
+        <td>${fmtDate(s.created_at)}</td>
+        <td>${escapeHtml(s.site||"")}</td>
+        <td>${escapeHtml(s.context||"")}</td>
+        <td>${escapeHtml(s.name||"")}</td>
+        <td><code>${s.session_id.slice(0,8)}</code></td>
+        <td>${(s.clip_count ?? 0)}</td>
+        <td><button data-open="${s.session_id}">Open</button> <button data-del="${s.session_id}">Delete</button></td>
+      </tr>
+    `).join("");
+
+    box.innerHTML = `
+      <table>
+        <thead><tr>
+          <th>Created</th><th>Site</th><th>Context</th><th>Name</th><th>ID</th><th>Clips</th><th>Actions</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    box.querySelectorAll("button[data-open]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const id = btn.getAttribute("data-open");
+        const sess = await idbGet(STORES.sessions, id);
+        if (!sess) { el("sessions-status").textContent = "Session not found."; return; }
+        state.session = sess;
+        const clips = await idbGetClipsForSession(sess.session_id);
+        el("cap-meta").textContent = `${sess.site} • ${sess.context} • ${sess.session_id.slice(0,8)}`;
+        el("cap-count").textContent = `Clips: ${clips.length}`;
+        el("cap-mode").textContent = "Snapshot";
+        el("capture-status").textContent = "Loaded session. Record a snapshot or start mini‑log.";
+        state.quickTags.clear();
+        buildTagButtons("tagButtons", QUICK_TAGS, state.quickTags);
+        show("capture");
+      });
+    });
+
+    box.querySelectorAll("button[data-del]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const id = btn.getAttribute("data-del");
+        if (!confirm("Delete this session and its clips?")) return;
+        const clips = await idbGetClipsForSession(id);
+        for (const c of clips) await idbDelete(STORES.clips, c.clip_id);
+        await idbDelete(STORES.sessions, id);
+        await renderSessions();
+        el("sessions-status").textContent = "Deleted.";
+      });
+    });
+
+    el("sessions-status").textContent = "";
+  }
+
+  async function refreshClipCount(){
+    if (!state.session) return;
+    const clips = await idbGetClipsForSession(state.session.session_id);
+    el("cap-count").textContent = `Clips: ${clips.length}`;
+  }
+
+  function recordOneClip(){
+    return new Promise(async (resolve, reject) => {
+      try { await ensureMic(); } catch(e){ reject(e); return; }
+      const mimeType = pickMimeType();
+      const chunks = [];
+      const started = new Date().toISOString();
+      let mr;
+      try { mr = new MediaRecorder(state.mediaStream, mimeType ? {mimeType} : undefined); }
+      catch(e){ reject(e); return; }
+
+      mr.ondataavailable = (evt) => { if (evt.data && evt.data.size > 0) chunks.push(evt.data); };
+      mr.onstop = () => {
+        const blob = new Blob(chunks, { type: mr.mimeType || "audio/webm" });
+        resolve({ blob, timestamp: started, duration_s: state.settings.clipLen, mime_type: blob.type });
+      };
+
+      mr.start();
+      el("cap-state").textContent = "Recording…";
+      let remaining = state.settings.clipLen;
+      el("cap-timer").textContent = `${remaining}s`;
+      const t = setInterval(() => {
+        remaining -= 1;
+        el("cap-timer").textContent = `${remaining}s`;
+        if (remaining <= 0){
+          clearInterval(t);
+          try { mr.stop(); } catch {}
+        }
+      }, 1000);
+    });
+  }
+
+  async function saveClipPipeline(rec){
+    const {blob, timestamp, duration_s, mime_type} = rec;
+    el("capture-status").textContent = "Computing features…";
+    const features = await extractFeaturesFromBlob(blob, state.settings.detail);
+    const mix = suggestSourcesBedEvents(features);
+    const pred = predictPE(features, mix, state.session?.profile || {});
+    const clip_id = crypto.randomUUID();
+
+    const clip = {
+      clip_id,
+      session_id: state.session.session_id,
+      timestamp,
+      duration_s,
+      mime_type,
+      audio_blob: blob,
+      quick_tags: Array.from(state.quickTags),
+
+      pleasantness: null,
+      eventfulness: null,
+      expectedness: "",
+      standout: [],
+
+      features,
+      mix_bed: mix.bed,
+      mix_events: mix.events,
+      predicted: pred
+    };
+
+    await idbPut(STORES.clips, clip);
+    state.session.clip_count = (state.session.clip_count || 0) + 1;
+    await idbPut(STORES.sessions, state.session);
+    await refreshClipCount();
+
+    state.quickTags.clear();
+    buildTagButtons("tagButtons", QUICK_TAGS, state.quickTags);
+
+    el("capture-status").textContent = "";
+    return clip;
+  }
+
+  async function showRateForClip(clip){
+    if (state.pendingClipUrl){ URL.revokeObjectURL(state.pendingClipUrl); state.pendingClipUrl=null; }
+    state.pendingClip = clip;
+    state.pendingClipUrl = URL.createObjectURL(clip.audio_blob);
+    el("rate-audio").src = state.pendingClipUrl;
+    el("rate-meta").textContent = `${state.session.site} • ${clip.timestamp} • ${clip.duration_s}s`;
+    el("rate-suggest").textContent = "Mix: " + formatMix({bed: clip.mix_bed, events: clip.mix_events});
+    el("rate-pred").textContent = `Predicted P/E: ${clip.predicted.pleasant_pred}/${clip.predicted.eventful_pred}`;
+    el("rate-conf").textContent = `Confidence: ${clip.predicted.confidence}`;
+
+    state.standout.clear();
+    buildTagButtons("standoutButtons", STANDOUT_TAGS, state.standout);
+
+    el("p-slider").value = "50"; el("p-val").textContent = "50";
+    el("e-slider").value = "50"; el("e-val").textContent = "50";
+    el("expected").value = "";
+    el("feat-box").textContent = JSON.stringify(clip.features, null, 2);
+
+    show("rate");
+  }
+
+  async function doSnapshot(){
+    if (!state.session){ el("capture-status").textContent = "No session loaded."; return; }
+    try{
+      el("cap-mode").textContent = "Snapshot";
+      const rec = await recordOneClip();
+      el("cap-state").textContent = "Processing…";
+      el("cap-timer").textContent = "";
+      const clip = await saveClipPipeline(rec);
+      await showRateForClip(clip);
+      el("cap-state").textContent = "Ready";
+    } catch(e){
+      el("capture-status").textContent = "Error: " + (e.message || e);
+      el("cap-state").textContent = "Ready";
+    }
+  }
+
+  const sleep = (ms) => new Promise(r=>setTimeout(r, ms));
+
+  async function startMiniLog(){
+    if (!state.session){ el("capture-status").textContent = "No session loaded."; return; }
+    if (state.isLogging) return;
+    state.isLogging = true;
+    state.logStopRequested = false;
+    el("cap-mode").textContent = "Mini‑log";
+    el("btn-minilog").disabled = true;
+    el("btn-stoplog").disabled = false;
+    el("btn-record").disabled = true;
+
+    const totalSamples = Math.max(1, Math.floor((state.settings.logMins*60) / state.settings.logIntervalS));
+    el("capture-status").textContent = `Mini‑log running: ${totalSamples} samples (${state.settings.logMins} min, every ${state.settings.logIntervalS}s).`;
+
+    for (let i=0;i<totalSamples;i++){
+      if (state.logStopRequested) break;
+      el("cap-state").textContent = `Logging sample ${i+1}/${totalSamples}`;
+      try{
+        const rec = await recordOneClip();
+        el("cap-state").textContent = "Processing…";
+        const clip = await saveClipPipeline(rec);
+        el("cap-state").textContent = "Saved";
+        if (state.settings.rateEach){
+          await showRateForClip(clip);
+          while (document.getElementById("page-rate") && !document.getElementById("page-rate").classList.contains("hidden")){
+            await sleep(250);
+          }
+        }
+      } catch(e){
+        el("capture-status").textContent = "Log error: " + (e.message || e);
+      }
+      if (i < totalSamples-1 && !state.logStopRequested) await sleep(state.settings.logIntervalS*1000);
+    }
+
+    state.isLogging = false;
+    el("btn-minilog").disabled = false;
+    el("btn-stoplog").disabled = true;
+    el("btn-record").disabled = false;
+    el("cap-mode").textContent = "Snapshot";
+    el("cap-state").textContent = "Ready";
+    el("capture-status").textContent = state.logStopRequested ? "Mini‑log stopped." : "Mini‑log complete.";
+  }
+  function stopMiniLog(){ state.logStopRequested = true; }
+
+  async function saveRating(){
+    if (!state.pendingClip) return;
+    const p = parseInt(el("p-slider").value,10);
+    const e = parseInt(el("e-slider").value,10);
+    const expected = el("expected").value || "";
+    const standout = Array.from(state.standout);
+
+    const clip = await idbGet(STORES.clips, state.pendingClip.clip_id);
+    if (!clip) return;
+    clip.pleasantness = p;
+    clip.eventfulness = e;
+    clip.expectedness = expected;
+    clip.standout = standout;
+    await idbPut(STORES.clips, clip);
+
+    state.pendingClip = null;
+    show("capture");
+  }
+  async function skipRating(){
+    state.pendingClip = null;
+    show("capture");
+  }
+  async function discardClip(){
+    if (!state.pendingClip) return;
+    if (!confirm("Discard this clip?")) return;
+    await idbDelete(STORES.clips, state.pendingClip.clip_id);
+    state.session.clip_count = Math.max(0, (state.session.clip_count || 0) - 1);
+    await idbPut(STORES.sessions, state.session);
+    await refreshClipCount();
+    state.pendingClip = null;
+    show("capture");
+  }
+
+  async function renderClips(){
+    if (!state.session) return;
+    el("clips-meta").textContent = `${state.session.site} • ${state.session.context} • ${state.session.session_id.slice(0,8)}`;
+    const clips = await idbGetClipsForSession(state.session.session_id);
+    clips.sort((a,b)=> (a.timestamp||"").localeCompare(b.timestamp||""));
+    if (!clips.length){ el("clips-table").innerHTML = "<i>No clips yet.</i>"; return; }
+
+    const rows = clips.map((c, idx) => {
+      const rated = (c.pleasantness !== null && c.eventfulness !== null);
+      const pred = c.predicted ? `${c.predicted.pleasant_pred}/${c.predicted.eventful_pred} (${c.predicted.confidence})` : "—";
+      const mix = (c.mix_bed && c.mix_events) ? formatMix({bed:c.mix_bed, events:c.mix_events}) : "—";
+      const laeq = c.features?.laeq_proxy_db;
+      const l1090 = c.features?.l10_l90_range_db;
+      return `
+        <tr>
+          <td>${idx+1}</td>
+          <td>${escapeHtml(c.timestamp||"")}</td>
+          <td>${pred}</td>
+          <td>${rated ? `${c.pleasantness}/${c.eventfulness}` : "<i>unrated</i>"}</td>
+          <td>${escapeHtml((c.standout||[]).join("; "))}</td>
+          <td>${escapeHtml((c.quick_tags||[]).join("; "))}</td>
+          <td>${escapeHtml(mix)}</td>
+          <td>${(laeq!==undefined)? laeq.toFixed(1):"—"}</td>
+          <td>${(l1090!==undefined)? l1090.toFixed(1):"—"}</td>
+        </tr>
+      `;
+    }).join("");
+
+    el("clips-table").innerHTML = `
+      <table>
+        <thead><tr>
+          <th>#</th><th>Time</th><th>Predicted P/E</th><th>Your P/E</th><th>Standout</th><th>Quick tags</th><th>Mix</th><th>LAeq dBFS</th><th>L10-L90</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  function drawScatter(canvas, points){
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    const pad = 35;
+    ctx.strokeStyle = "#888";
+    ctx.beginPath();
+    ctx.moveTo(pad, canvas.height-pad);
+    ctx.lineTo(canvas.width-pad, canvas.height-pad);
+    ctx.moveTo(pad, canvas.height-pad);
+    ctx.lineTo(pad, pad);
+    ctx.stroke();
+
+    ctx.fillStyle = "#444";
+    ctx.font = "12px Arial";
+    ctx.fillText("Pleasantness →", canvas.width/2 - 40, canvas.height-10);
+    ctx.save();
+    ctx.translate(12, canvas.height/2 + 40);
+    ctx.rotate(-Math.PI/2);
+    ctx.fillText("Eventfulness →", 0, 0);
+    ctx.restore();
+
+    ctx.strokeStyle = "#ddd";
+    ctx.setLineDash([4,4]);
+    const midX = pad + (canvas.width-2*pad)*0.5;
+    const midY = canvas.height-pad - (canvas.height-2*pad)*0.5;
+    ctx.beginPath();
+    ctx.moveTo(midX, pad); ctx.lineTo(midX, canvas.height-pad);
+    ctx.moveTo(pad, midY); ctx.lineTo(canvas.width-pad, midY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = "#111";
+    points.forEach(p => {
+      const x = pad + (canvas.width-2*pad)*(p.p/100);
+      const y = canvas.height-pad - (canvas.height-2*pad)*(p.e/100);
+      ctx.beginPath();
+      ctx.arc(x,y,3,0,Math.PI*2);
+      ctx.fill();
+    });
+  }
+
+  function quadrantLabel(p,e){
+    if (p >= 50 && e < 50) return "Calm";
+    if (p >= 50 && e >= 50) return "Vibrant";
+    if (p < 50 && e >= 50) return "Chaotic";
+    return "Monotonous";
+  }
+
+  async function renderSummary(){
+    if (!state.session) return;
+    el("sum-meta").textContent = `${state.session.site} • ${state.session.context} • ${state.session.session_id.slice(0,8)}`;
+    const clips = await idbGetClipsForSession(state.session.session_id);
+    const rated = clips.filter(c => c.pleasantness !== null && c.eventfulness !== null);
+
+    const avgP = rated.length ? mean(rated.map(c=>c.pleasantness)) : null;
+    const avgE = rated.length ? mean(rated.map(c=>c.eventfulness)) : null;
+    const predP = clips.length ? mean(clips.map(c=>c.predicted?.pleasant_pred ?? 0)) : null;
+    const predE = clips.length ? mean(clips.map(c=>c.predicted?.eventful_pred ?? 0)) : null;
+
+    el("kpi").innerHTML = `
+      <div class="card2"><div class="note">Clips</div><div class="big">${clips.length}</div><div class="note">Rated: ${rated.length}</div></div>
+      <div class="card2"><div class="note">Avg Your P</div><div class="big">${avgP===null?"—":avgP.toFixed(0)}</div></div>
+      <div class="card2"><div class="note">Avg Your E</div><div class="big">${avgE===null?"—":avgE.toFixed(0)}</div><div class="note">${avgP===null?"":quadrantLabel(avgP,avgE)}</div></div>
+      <div class="card2"><div class="note">Avg Pred P</div><div class="big">${predP===null?"—":predP.toFixed(0)}</div></div>
+      <div class="card2"><div class="note">Avg Pred E</div><div class="big">${predE===null?"—":predE.toFixed(0)}</div><div class="note">${predP===null?"":quadrantLabel(predP,predE)}</div></div>
+    `;
+    drawScatter(el("scatter"), rated.map(c=>({p:c.pleasantness,e:c.eventfulness})));
+    drawScatter(el("predscatter"), clips.map(c=>({p:c.predicted?.pleasant_pred ?? 0, e:c.predicted?.eventful_pred ?? 0})));
+
+    const counts = {};
+    rated.forEach(c => (c.standout||[]).forEach(t => counts[t]=(counts[t]||0)+1));
+    const topTags = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,10);
+    el("tag-summary").innerHTML = topTags.length ? `
+      <table><thead><tr><th>Tag</th><th>Count</th></tr></thead>
+      <tbody>${topTags.map(([t,c])=>`<tr><td>${escapeHtml(t)}</td><td>${c}</td></tr>`).join("")}</tbody></table>
+    ` : "<i>No standout tags yet.</i>";
+
+    const rows = clips.slice().sort((a,b)=> (a.timestamp||"").localeCompare(b.timestamp||"")).slice(-40)
+      .map(c => `<tr><td>${escapeHtml(c.timestamp)}</td><td>${c.predicted?.pleasant_pred ?? ""}</td><td>${c.predicted?.eventful_pred ?? ""}</td><td>${escapeHtml((c.mix_bed||[]).slice(0,1).map(x=>`${x[0]} ${x[1].toFixed(0)}%`).join(""))}</td></tr>`).join("");
+    el("log-table").innerHTML = clips.length ? `
+      <table><thead><tr><th>Time</th><th>Pred P</th><th>Pred E</th><th>Bed lead</th></tr></thead><tbody>${rows}</tbody></table>
+    ` : "<i>No clips yet.</i>";
+  }
+
+  function downloadText(filename, text, mime="text/plain"){
+    const blob = new Blob([text], {type:mime});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+  function csv(v){
+    const s = String(v ?? "");
+    const esc = s.replaceAll('"','""');
+    return `"${esc}"`;
+  }
+  function num(v){ return (typeof v === "number" && isFinite(v)) ? v.toFixed(6) : ""; }
+  function safeName(s){ return String(s||"site").toLowerCase().replaceAll(/[^a-z0-9]+/g,"_").replaceAll(/^_+|_+$/g,""); }
+
+  async function exportSession(){
+    if (!state.session) return;
+    const clips = await idbGetClipsForSession(state.session.session_id);
+
+    const header = [
+      "session_id","site","context","session_name","session_created_at",
+      "age_band","noise_sensitivity","purpose",
+      "clip_id","timestamp","duration_s","mime_type",
+      "pred_pleasant","pred_eventful","pred_confidence","pred_conf_score",
+      "pleasantness","eventfulness","expectedness",
+      "quick_tags","standout",
+      "bed_mix","event_mix",
+      "laeq_proxy_db","lmax_proxy_db","crest_db","l10_proxy_db","l90_proxy_db","l10_l90_range_db","level_skewness_1s",
+      "modulation_depth","onset_rate_hz","spectral_flux_norm","stationarity_index",
+      "centroid_hz_mean","rolloff85_hz","flatness_mean","low_pct","mid_pct","high_pct",
+      "tonal_peakiness","harmonicity_proxy",
+      "has_audio_blob"
+    ];
+
+    const lines = [header.join(",")];
+    for (const c of clips){
+      const f = c.features || {};
+      const pr = c.predicted || {};
+      const bed = (c.mix_bed||[]).map(x=>`${x[0]} ${x[1].toFixed(0)}%`).join(" | ");
+      const ev = (c.mix_events||[]).map(x=>`${x[0]} ${x[1].toFixed(0)}%`).join(" | ");
+      const prof = state.session.profile || {};
+
+      const row = [
+        state.session.session_id,
+        csv(state.session.site),
+        csv(state.session.context),
+        csv(state.session.name),
+        state.session.created_at,
+
+        csv(prof.age_band||""),
+        csv(prof.noise_sensitivity||""),
+        csv(prof.purpose||""),
+
+        c.clip_id,
+        c.timestamp,
+        c.duration_s,
+        csv(c.mime_type),
+
+        pr.pleasant_pred ?? "",
+        pr.eventful_pred ?? "",
+        csv(pr.confidence||""),
+        num(pr.confidence_score),
+
+        c.pleasantness ?? "",
+        c.eventfulness ?? "",
+        csv(c.expectedness || ""),
+
+        csv((c.quick_tags||[]).join("; ")),
+        csv((c.standout||[]).join("; ")),
+        csv(bed),
+        csv(ev),
+
+        num(f.laeq_proxy_db), num(f.lmax_proxy_db), num(f.crest_db), num(f.l10_proxy_db), num(f.l90_proxy_db), num(f.l10_l90_range_db), num(f.level_skewness_1s),
+        num(f.modulation_depth), num(f.onset_rate_hz), num(f.spectral_flux_norm), num(f.stationarity_index),
+        num(f.centroid_hz_mean), num(f.rolloff85_hz), num(f.flatness_mean), num(f.low_pct), num(f.mid_pct), num(f.high_pct),
+        num(f.tonal_peakiness), num(f.harmonicity_proxy),
+
+        c.audio_blob ? "1" : "0"
+      ];
+      lines.append
+      lines.push(row.join(","));
+    }
+
+    const stamp = new Date().toISOString().replaceAll(":","-");
+    downloadText(`soundscape_${safeName(state.session.site)}_${stamp}.csv`, lines.join("\\n"), "text/csv");
+
+    const json = {
+      session: state.session,
+      clips: clips.map(c => ({...c, audio_blob: undefined}))
+    };
+    downloadText(`soundscape_${safeName(state.session.site)}_${stamp}.json`, JSON.stringify(json, null, 2), "application/json");
+    alert("Exported CSV + JSON (audio remains stored locally in the browser).");
+  }
+
+  // Wiring
+  el("btn-settings").addEventListener("click", () => show("settings"));
+  el("btn-back-landing").addEventListener("click", () => show("landing"));
+  el("btn-sessions").addEventListener("click", async () => { show("sessions"); await renderSessions(); });
+  el("btn-back-from-sessions").addEventListener("click", () => show("landing"));
+  el("btn-refresh-sessions").addEventListener("click", async () => await renderSessions());
+  el("btn-delete-all").addEventListener("click", async () => {
+    if (!confirm("Delete ALL sessions and clips on this device?")) return;
+    await idbClear(STORES.sessions);
+    await idbClear(STORES.clips);
+    await renderSessions();
+    el("sessions-status").textContent = "All deleted.";
+  });
+
+  el("btn-save-settings").addEventListener("click", () => {
+    state.settings.clipLen = parseInt(el("set-cliplen").value,10);
+    state.settings.detail = el("set-detail").value;
+    state.settings.logMins = parseInt(el("set-logmins").value,10);
+    state.settings.logIntervalS = parseInt(el("set-loginterval").value,10);
+    state.settings.rateEach = el("set-rate-each").checked;
+    el("settings-status").textContent = "Saved.";
+  });
+
+  el("btn-start-session").addEventListener("click", () => {
+    if (!el("c-audio").checked){
+      el("landing-status").textContent = "Audio consent is required to proceed.";
+      return;
+    }
+    el("landing-status").textContent = "";
+    show("setup");
+  });
+
+  el("btn-cancel-setup").addEventListener("click", () => show("landing"));
+
+  el("btn-begin").addEventListener("click", async () => {
+    const name = el("sess-name").value.trim();
+    const site = el("sess-site").value.trim();
+    const context = el("sess-context").value;
+    if (!name || !site) { el("setup-status").textContent = "Enter session name + site label."; return; }
+
+    const profile = {
+      age_band: el("pf-age").value,
+      noise_sensitivity: el("pf-sens").value,
+      purpose: el("pf-purpose").value
+    };
+
+    const session = {
+      session_id: crypto.randomUUID(),
+      created_at: new Date().toISOString(),
+      name, site, context,
+      settings: {...state.settings},
+      profile,
+      clip_count: 0
+    };
+    await idbPut(STORES.sessions, session);
+    state.session = session;
+
+    el("cap-meta").textContent = `${session.site} • ${session.context} • ${session.session_id.slice(0,8)}`;
+    el("cap-count").textContent = "Clips: 0";
+    el("cap-mode").textContent = "Snapshot";
+    el("capture-status").textContent = "Ready to record. Predictor is beta; your ratings build the dataset.";
+    state.quickTags.clear();
+    buildTagButtons("tagButtons", QUICK_TAGS, state.quickTags);
+    show("capture");
+  });
+
+  el("btn-record").addEventListener("click", doSnapshot);
+  el("btn-minilog").addEventListener("click", startMiniLog);
+  el("btn-stoplog").addEventListener("click", stopMiniLog);
+
+  el("btn-back-to-sessions").addEventListener("click", async () => { show("sessions"); await renderSessions(); });
+  el("btn-summary").addEventListener("click", async () => { show("summary"); await renderSummary(); });
+  el("btn-clips").addEventListener("click", async () => { show("clips"); await renderClips(); });
+
+  el("btn-end").addEventListener("click", () => {
+    state.logStopRequested = True;
+    state.isLogging = false;
+    if (state.mediaStream){
+      state.mediaStream.getTracks().forEach(t => t.stop());
+      state.mediaStream = null;
+    }
+    stopLiveMeter();
+    state.session = null;
+    show("landing");
+  });
+
+  el("p-slider").addEventListener("input", () => el("p-val").textContent = el("p-slider").value);
+  el("e-slider").addEventListener("input", () => el("e-val").textContent = el("e-slider").value);
+  el("btn-save-rating").addEventListener("click", saveRating);
+  el("btn-skip-rating").addEventListener("click", skipRating);
+  el("btn-discard-clip").addEventListener("click", discardClip);
+
+  el("btn-back-capture-from-clips").addEventListener("click", () => show("capture"));
+  el("btn-export").addEventListener("click", exportSession);
+
+  el("btn-back-capture-from-summary").addEventListener("click", () => show("capture"));
+  el("btn-export2").addEventListener("click", exportSession);
+
+  if (!secureOk()) {
+    el("secureNote").style.display = "block";
+    el("secure-pill").textContent = "NOT HTTPS";
+  } else {
+    el("secure-pill").textContent = "HTTPS OK";
+    el("secure-pill").classList.add("ok");
+  }
+
+  buildTagButtons("tagButtons", QUICK_TAGS, state.quickTags);
+  buildTagButtons("standoutButtons", STANDOUT_TAGS, state.standout);
+  show("landing");
+})();
+</script>
+
+</body>
+</html>
