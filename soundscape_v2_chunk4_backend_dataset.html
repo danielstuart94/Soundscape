@@ -1,0 +1,1011 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Soundscape V2 - Chunk 4 (Backend + Dataset Capture)</title>
+  <style>
+    body{font-family:Arial;margin:16px;max-width:1050px}
+    .card{border:1px solid #ddd;border-radius:12px;padding:14px;margin:12px 0}
+    .row{margin:10px 0}
+    button{padding:12px 14px;margin:6px 6px 0 0;font-size:15px}
+    input,select,textarea{padding:8px;font-size:15px}
+    .note{font-size:12px;color:#555;line-height:1.35}
+    .pill{display:inline-block;padding:2px 8px;border:1px solid #ddd;border-radius:999px;font-size:12px;margin-left:6px}
+    .hidden{display:none}
+    .grid{display:grid;grid-template-columns:1fr;gap:12px}
+    @media(min-width:980px){.grid{grid-template-columns:1fr 1fr}}
+    .meter{height:12px;background:#eee;border:1px solid #ccc;border-radius:6px;overflow:hidden}
+    .bar{height:100%;width:0%;background:#333}
+    table{border-collapse:collapse;width:100%;font-size:12px}
+    th,td{border:1px solid #ddd;padding:6px;vertical-align:top}
+    th{background:#f3f3f3;text-align:left}
+    .danger{border-color:#c33}
+    .warn{color:#8a0000;font-weight:700}
+    .big{font-size:18px;font-weight:700}
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
+  </style>
+</head>
+<body>
+
+<h2>Soundscape V2 (Chunk 4)</h2>
+<div class="note">
+  Goal: 10s scan → soundscape features → beta P/E prediction → user P/E rating → upload to backend (Firebase) + offline queue.
+  <span class="pill" id="secure-pill">…</span>
+  <span class="pill" id="backend-pill">Backend: Off</span>
+</div>
+
+<div id="p-consent" class="card">
+  <h3>Consent</h3>
+  <div class="row">
+    <label><input type="checkbox" id="c-audio"> I consent to recording short audio clips for analysis</label>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="c-geo"> I consent to capturing approximate GPS location (optional)</label>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="c-upload"> I consent to uploading anonymised results to the dataset (optional)</label>
+  </div>
+  <div class="row">
+    <button id="btn-start">Start</button>
+    <button id="btn-settings">Settings</button>
+  </div>
+  <div class="note" id="consent-status"></div>
+</div>
+
+<div id="p-settings" class="card hidden">
+  <h3>Settings</h3>
+
+  <div class="grid">
+    <div class="card">
+      <h4 style="margin:0 0 8px">Capture</h4>
+      <div class="row">
+        Clip length:
+        <select id="set-cliplen">
+          <option value="5">5s</option>
+          <option value="10" selected>10s</option>
+          <option value="15">15s</option>
+        </select>
+      </div>
+      <div class="row">
+        Feature detail:
+        <select id="set-detail">
+          <option value="fast" selected>Fast</option>
+          <option value="full">Full (slower)</option>
+        </select>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="set-store-audio" checked> Store audio locally on device (recommended)</label>
+      </div>
+      <div class="note">This app is not a calibrated dB meter; “level” values are relative (dBFS proxy) for modelling.</div>
+    </div>
+
+    <div class="card">
+      <h4 style="margin:0 0 8px">Backend (Firebase)</h4>
+      <div class="note">Optional. If you don’t configure Firebase, data stays on-device and exports still work.</div>
+
+      <div class="row">
+        <label><input type="checkbox" id="set-enable-backend"> Enable Firebase upload</label>
+      </div>
+      <div class="row">
+        Project config (paste JSON from Firebase console):
+        <br/>
+        <textarea id="fb-config" rows="7" style="width:100%" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","appId":"..."}'></textarea>
+      </div>
+      <div class="row">
+        Collection name:
+        <input id="fb-collection" value="soundscape_scans" style="width:240px"/>
+      </div>
+      <div class="note">Firestore required. Security rules should allow create-only (or token-based later).</div>
+    </div>
+  </div>
+
+  <div class="row">
+    <button id="btn-save-settings">Save</button>
+    <button id="btn-back-consent">Back</button>
+  </div>
+  <div class="note" id="settings-status"></div>
+</div>
+
+<div id="p-scan" class="card hidden">
+  <div class="row" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+    <div>
+      <h3 style="margin:0">Scan</h3>
+      <div class="note">
+        <span class="pill" id="scan-mode">Snapshot</span>
+        <span class="pill" id="scan-queue">Queue: 0</span>
+      </div>
+    </div>
+    <div>
+      <button id="btn-history">History</button>
+      <button id="btn-sync">Sync queued</button>
+      <button id="btn-end" class="danger">End</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <span class="big" id="scan-state">Ready</span>
+    <span class="pill" id="scan-timer">—</span>
+  </div>
+
+  <div class="row meter"><div id="live-bar" class="bar"></div></div>
+  <div class="row note warn" id="secureNote" style="display:none">
+    Microphone requires HTTPS (or localhost). Use your GitHub Pages https:// URL.
+  </div>
+
+  <div class="row">
+    <button id="btn-record">Record scan</button>
+  </div>
+
+  <div class="note" id="scan-status"></div>
+</div>
+
+<div id="p-rate" class="card hidden">
+  <h3>Results + quick rating</h3>
+
+  <div class="row">
+    <span class="pill" id="r-meta">—</span>
+    <span class="pill" id="r-pred">Pred P/E: —</span>
+    <span class="pill" id="r-conf">Conf: —</span>
+    <span class="pill" id="r-upload">Upload: —</span>
+  </div>
+
+  <div class="row">
+    <audio id="r-audio" controls style="width:100%"></audio>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h4 style="margin:0 0 8px">Your perception (the valuable part)</h4>
+
+      <div class="row">
+        Pleasantness: <b id="p-val">50</b>/100<br/>
+        <input id="p-slider" type="range" min="0" max="100" value="50" style="width:92%"/>
+      </div>
+
+      <div class="row">
+        Eventfulness: <b id="e-val">50</b>/100<br/>
+        <input id="e-slider" type="range" min="0" max="100" value="50" style="width:92%"/>
+      </div>
+
+      <div class="row">
+        Context:
+        <select id="ctx">
+          <option value="">(skip)</option>
+          <option>Street</option><option>Park</option><option>Square</option><option>Transit</option>
+          <option>Cafe</option><option>Office</option><option>Residential</option><option>Other</option>
+        </select>
+      </div>
+
+      <div class="row">
+        Purpose:
+        <select id="purpose">
+          <option value="">(skip)</option>
+          <option>Working</option><option>Relaxing</option><option>Travelling</option><option>Socialising</option><option>Living</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="card">
+      <h4 style="margin:0 0 8px">What stood out? (optional)</h4>
+      <div class="row">
+        <input id="tags" placeholder="traffic, birds, voices, wind..." style="width:100%"/>
+      </div>
+
+      <h4 style="margin:14px 0 8px">Predicted mix (beta)</h4>
+      <div class="mono" id="mix-box">—</div>
+
+      <div class="note" style="margin-top:10px">
+        This is not a “dB meter”. The model needs consistent features + many human ratings to learn a perception function.
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <button id="btn-save">Save (queue/upload)</button>
+    <button id="btn-skip">Skip rating</button>
+    <button id="btn-discard" class="danger">Discard</button>
+  </div>
+
+  <div class="card">
+    <h4 style="margin:0 0 8px">Feature vector (for debugging)</h4>
+    <div class="mono" id="feat-box">—</div>
+  </div>
+
+  <div class="note" id="rate-status"></div>
+</div>
+
+<div id="p-history" class="card hidden">
+  <div class="row" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+    <div>
+      <h3 style="margin:0">History (local)</h3>
+      <div class="note">Audio stored locally if enabled. Export excludes audio.</div>
+    </div>
+    <div>
+      <button id="btn-back-scan">Back</button>
+      <button id="btn-export">Export JSON</button>
+      <button id="btn-clear" class="danger">Clear local</button>
+    </div>
+  </div>
+
+  <div class="row" id="hist-table"></div>
+  <div class="note" id="hist-status"></div>
+</div>
+
+<script>
+(() => {
+  const el = (id) => document.getElementById(id);
+  const show = (id) => {
+    ["p-consent","p-settings","p-scan","p-rate","p-history"].forEach(x => el(x).classList.add("hidden"));
+    el(id).classList.remove("hidden");
+  };
+  const secureOk = () => (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1");
+
+  // IndexedDB
+  const DB_NAME="soundscape_chunk4";
+  const DB_VER=1;
+  const STORES={ scans:"scans", queue:"queue" };
+
+  function openDB(){
+    return new Promise((resolve,reject)=>{
+      const req=indexedDB.open(DB_NAME,DB_VER);
+      req.onupgradeneeded=()=>{
+        const db=req.result;
+        if(!db.objectStoreNames.contains(STORES.scans)){
+          const s=db.createObjectStore(STORES.scans,{keyPath:"id"});
+          s.createIndex("ts","ts",{unique:false});
+        }
+        if(!db.objectStoreNames.contains(STORES.queue)){
+          const q=db.createObjectStore(STORES.queue,{keyPath:"id"});
+          q.createIndex("ts","ts",{unique:false});
+        }
+      };
+      req.onsuccess=()=>resolve(req.result);
+      req.onerror=()=>reject(req.error);
+    });
+  }
+  async function idbPut(store,val){
+    const db=await openDB();
+    return new Promise((resolve,reject)=>{
+      const tx=db.transaction(store,"readwrite");
+      tx.objectStore(store).put(val);
+      tx.oncomplete=()=>{db.close(); resolve();};
+      tx.onerror=()=>{db.close(); reject(tx.error);};
+    });
+  }
+  async function idbGetAll(store){
+    const db=await openDB();
+    return new Promise((resolve,reject)=>{
+      const tx=db.transaction(store,"readonly");
+      const req=tx.objectStore(store).getAll();
+      req.onsuccess=()=>{db.close(); resolve(req.result||[]);};
+      req.onerror=()=>{db.close(); reject(req.error);};
+    });
+  }
+  async function idbDelete(store,key){
+    const db=await openDB();
+    return new Promise((resolve,reject)=>{
+      const tx=db.transaction(store,"readwrite");
+      tx.objectStore(store).delete(key);
+      tx.oncomplete=()=>{db.close(); resolve();};
+      tx.onerror=()=>{db.close(); reject(tx.error);};
+    });
+  }
+  async function idbClear(store){
+    const db=await openDB();
+    return new Promise((resolve,reject)=>{
+      const tx=db.transaction(store,"readwrite");
+      tx.objectStore(store).clear();
+      tx.oncomplete=()=>{db.close(); resolve();};
+      tx.onerror=()=>{db.close(); reject(tx.error);};
+    });
+  }
+
+  const state = {
+    consent: { audio:false, geo:false, upload:false },
+    settings: { clipLen:10, detail:"fast", storeAudio:true, backendEnabled:false, fbConfigText:"", fbCollection:"soundscape_scans" },
+    stream:null, liveCtx:null, liveAnalyser:null, liveRAF:null,
+    pending:null, pendingUrl:null,
+    fb: { app:null, db:null, enabled:false, loaded:false }
+  };
+
+  function updateSecurePill(){
+    if (!secureOk()){
+      el("secureNote").style.display="block";
+      el("secure-pill").textContent="NOT HTTPS";
+    } else {
+      el("secureNote").style.display="none";
+      el("secure-pill").textContent="HTTPS OK";
+    }
+  }
+
+  function stopLive(){
+    if(state.liveRAF) cancelAnimationFrame(state.liveRAF);
+    state.liveRAF=null;
+    if(state.liveCtx) state.liveCtx.close().catch(()=>{});
+    state.liveCtx=null;
+    state.liveAnalyser=null;
+    el("live-bar").style.width="0%";
+  }
+
+  function startLive(stream){
+    stopLive();
+    const AudioCtx=window.AudioContext||window.webkitAudioContext;
+    state.liveCtx=new AudioCtx();
+    const src=state.liveCtx.createMediaStreamSource(stream);
+    state.liveAnalyser=state.liveCtx.createAnalyser();
+    state.liveAnalyser.fftSize=1024;
+    src.connect(state.liveAnalyser);
+    const td=new Float32Array(state.liveAnalyser.fftSize);
+    let display=-70;
+    const loop=()=>{
+      state.liveAnalyser.getFloatTimeDomainData(td);
+      let ss=0;
+      for(let i=0;i<td.length;i++) ss+=td[i]*td[i];
+      const rms=Math.sqrt(ss/td.length);
+      const db=20*Math.log10(rms+1e-12);
+      display=display*0.9+db*0.1;
+      const pct=Math.max(0,Math.min(100,(display+80)*1.25));
+      el("live-bar").style.width=pct+"%";
+      state.liveRAF=requestAnimationFrame(loop);
+    };
+    state.liveRAF=requestAnimationFrame(loop);
+  }
+
+  async function ensureMic(){
+    if (state.stream) return state.stream;
+    if (!secureOk()) throw new Error("Not HTTPS. Use GitHub Pages https:// URL.");
+    const s = await navigator.mediaDevices.getUserMedia({audio:true});
+    state.stream=s;
+    startLive(s);
+    return s;
+  }
+
+  function pickMimeType(){
+    const prefs=["audio/webm;codecs=opus","audio/webm","audio/ogg;codecs=opus","audio/ogg","audio/mp4"];
+    for(const m of prefs) if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) return m;
+    return "";
+  }
+
+  function mean(arr){ if(!arr.length) return 0; return arr.reduce((a,b)=>a+b,0)/arr.length; }
+  function percentile(sorted,p){
+    if(!sorted.length) return 0;
+    const idx=(sorted.length-1)*p;
+    const lo=Math.floor(idx), hi=Math.ceil(idx);
+    if(lo===hi) return sorted[lo];
+    const w=idx-lo;
+    return sorted[lo]*(1-w)+sorted[hi]*w;
+  }
+  function clamp01(x){ return Math.max(0,Math.min(1,x)); }
+  function hann(n,i){ return 0.5*(1-Math.cos(2*Math.PI*i/(n-1))); }
+
+  function fftRadix2ReIm(re, im){
+    const n=re.length;
+    let j=0;
+    for(let i=1;i<n;i++){
+      let bit=n>>1;
+      while(j&bit){ j^=bit; bit>>=1; }
+      j^=bit;
+      if(i<j){
+        [re[i],re[j]]=[re[j],re[i]];
+        [im[i],im[j]]=[im[j],im[i]];
+      }
+    }
+    for(let len=2; len<=n; len<<=1){
+      const ang=-2*Math.PI/len;
+      const wlenRe=Math.cos(ang);
+      const wlenIm=Math.sin(ang);
+      for(let i=0;i<n;i+=len){
+        let wRe=1,wIm=0;
+        for(let k=0;k<len/2;k++){
+          const uRe=re[i+k], uIm=im[i+k];
+          const vRe=re[i+k+len/2]*wRe - im[i+k+len/2]*wIm;
+          const vIm=re[i+k+len/2]*wIm + im[i+k+len/2]*wRe;
+          re[i+k]=uRe+vRe; im[i+k]=uIm+vIm;
+          re[i+k+len/2]=uRe-vRe; im[i+k+len/2]=uIm-vIm;
+          const nextWRe=wRe*wlenRe - wIm*wlenIm;
+          const nextWIm=wRe*wlenIm + wIm*wlenRe;
+          wRe=nextWRe; wIm=nextWIm;
+        }
+      }
+    }
+  }
+
+  async function extractFeaturesFromBlob(blob, detail){
+    const AudioCtx=window.AudioContext||window.webkitAudioContext;
+    const ctx=new AudioCtx();
+    const ab=await blob.arrayBuffer();
+    const audioBuf=await ctx.decodeAudioData(ab.slice(0));
+    await ctx.close();
+
+    const sr=audioBuf.sampleRate;
+    const ch=audioBuf.getChannelData(0);
+    const n=ch.length;
+
+    let sumSq=0;
+    for(let i=0;i<n;i++){ const v=ch[i]; sumSq+=v*v; }
+    const rms=Math.sqrt(sumSq/n);
+    const level_dbfs=20*Math.log10(rms+1e-12);
+
+    const win=Math.max(1,Math.floor(sr*0.1));
+    let maxWin=0;
+    for(let i=0;i+win<=n;i+=win){
+      let ss=0;
+      for(let k=0;k<win;k++){ const v=ch[i+k]; ss+=v*v; }
+      const wr=Math.sqrt(ss/win);
+      if(wr>maxWin) maxWin=wr;
+    }
+    const peak_dbfs=20*Math.log10(maxWin+1e-12);
+    const crest_db=peak_dbfs-level_dbfs;
+
+    const secLen=Math.max(1,Math.floor(sr*1.0));
+    const levels=[];
+    for(let i=0;i+secLen<=n;i+=secLen){
+      let ss=0;
+      for(let k=0;k<secLen;k++){ const v=ch[i+k]; ss+=v*v; }
+      const rr=Math.sqrt(ss/secLen);
+      levels.push(20*Math.log10(rr+1e-12));
+    }
+    const sorted=levels.slice().sort((a,b)=>a-b);
+    const l10=percentile(sorted,0.90);
+    const l90=percentile(sorted,0.10);
+    const dyn=l10-l90;
+
+    const envFs=100;
+    const step=Math.max(1,Math.floor(sr/envFs));
+    const env=new Float32Array(Math.floor(n/step));
+    for(let i=0,j=0;i<n;i+=step,j++) env[j]=Math.abs(ch[i]);
+
+    const ma=new Float32Array(env.length);
+    const w=5;
+    let run=0;
+    for(let i=0;i<env.length;i++){
+      run+=env[i];
+      if(i>=w) run-=env[i-w];
+      ma[i]=run/Math.min(i+1,w);
+    }
+    const envMean=mean(Array.from(ma));
+    let envVar=0;
+    for(let i=0;i<ma.length;i++){ const d=ma[i]-envMean; envVar+=d*d; }
+    envVar/=(ma.length||1);
+    const envStd=Math.sqrt(envVar);
+    const modulation=clamp01(envStd/(envMean+1e-12));
+
+    const jumps=[];
+    for(let i=1;i<ma.length;i++) jumps.push(ma[i]-ma[i-1]);
+    const js=jumps.slice().sort((a,b)=>a-b);
+    const med=js.length?percentile(js,0.5):0;
+    const thr=med+3*(Math.abs(med)+1e-4);
+    let onset=0;
+    for(let i=0;i<jumps.length;i++) if(jumps[i]>thr) onset++;
+    const onset_rate=(ma.length>1)?(onset/(ma.length/envFs)):0;
+
+    const NFFT=1024;
+    const HOP=(detail==="full")?256:512;
+    const maxFrames=(detail==="full")?140:70;
+    const nyq=sr/2;
+    const binHz=nyq/(NFFT/2);
+
+    let frameCount=0;
+    let centroidSum=0, centroidVarAcc=0;
+    let flatSum=0, fluxSum=0;
+    let lowSum=0, midSum=0, highSum=0;
+    let peakinessSum=0;
+    let prevMag=null;
+
+    for(let start=0; start+NFFT<=n && frameCount<maxFrames; start+=HOP){
+      const re=new Array(NFFT);
+      const im=new Array(NFFT).fill(0);
+      for(let i=0;i<NFFT;i++) re[i]=ch[start+i]*hann(NFFT,i);
+      fftRadix2ReIm(re,im);
+
+      const mag=new Float32Array(NFFT/2);
+      let den=0, num=0;
+      let logSum=0, arSum=0;
+      let mx=0;
+
+      for(let i=0;i<NFFT/2;i++){
+        const rr=re[i], ii=im[i];
+        const v=Math.sqrt(rr*rr+ii*ii)+1e-12;
+        mag[i]=v;
+        const hz=i*binHz;
+        num+=hz*v; den+=v;
+        logSum+=Math.log(v); arSum+=v;
+        if(v>mx) mx=v;
+
+        if(hz<250) lowSum+=v;
+        else if(hz<2000) midSum+=v;
+        else highSum+=v;
+      }
+
+      const centroid=den>0?(num/den):0;
+      const geo=Math.exp(logSum/(NFFT/2));
+      const ar=arSum/(NFFT/2);
+      const flat=ar>0?(geo/ar):0;
+      const peakiness=(arSum>0)?(mx/(arSum/(NFFT/2))):0;
+
+      centroidSum+=centroid;
+      centroidVarAcc+=centroid*centroid;
+      flatSum+=flat;
+      peakinessSum+=peakiness;
+
+      if(prevMag){
+        let fs=0;
+        for(let i=0;i<mag.length;i++){
+          const d=mag[i]-prevMag[i];
+          if(d>0) fs+=d;
+        }
+        fluxSum+=fs;
+      }
+      prevMag=mag;
+      frameCount++;
+    }
+
+    const centroidMean=frameCount?centroidSum/frameCount:0;
+    const centroidVar=frameCount?(centroidVarAcc/frameCount - centroidMean*centroidMean):0;
+    const stationarity=clamp01(1 - Math.sqrt(Math.max(0,centroidVar))/2000);
+    const flatMean=frameCount?flatSum/frameCount:0;
+    const peakinessMean=frameCount?peakinessSum/frameCount:0;
+    const fluxMean=frameCount>1?fluxSum/(frameCount-1):0;
+    const fluxNorm=Math.min(1,fluxMean/50.0);
+
+    const bandTot=lowSum+midSum+highSum;
+    const lowPct=bandTot>0?lowSum/bandTot:0;
+    const midPct=bandTot>0?midSum/bandTot:0;
+    const highPct=bandTot>0?highSum/bandTot:0;
+
+    let rolloff85=0;
+    if(prevMag){
+      let tot=0;
+      for(let i=0;i<prevMag.length;i++) tot+=prevMag[i];
+      let cum=0;
+      const target=0.85*tot;
+      for(let i=0;i<prevMag.length;i++){
+        cum+=prevMag[i];
+        if(cum>=target){ rolloff85=i*binHz; break; }
+      }
+    }
+
+    return {
+      sr,
+      level_dbfs, peak_dbfs, crest_db,
+      l10_dbfs:l10, l90_dbfs:l90, dynamic_range_db:dyn,
+      modulation_depth:modulation, onset_rate_hz:onset_rate,
+      spectral_flux_norm:fluxNorm, stationarity_index:stationarity,
+      centroid_hz_mean:centroidMean, rolloff85_hz:rolloff85,
+      flatness_mean:flatMean,
+      low_pct:lowPct, mid_pct:midPct, high_pct:highPct,
+      tonal_peakiness:peakinessMean
+    };
+  }
+
+  function suggestMix(f){
+    const flux = f.spectral_flux_norm ?? 0;
+    const flat = clamp01(f.flatness_mean ?? 0);
+    const tonal = clamp01(((f.tonal_peakiness ?? 1) - 1) / 4);
+    const low = f.low_pct ?? 0;
+    const mid = f.mid_pct ?? 0;
+    const high = f.high_pct ?? 0;
+    const crest = clamp01(((f.crest_db ?? 0) - 6) / 18);
+    const onsets = clamp01((f.onset_rate_hz ?? 0) / 8.0);
+    const mod = clamp01(f.modulation_depth ?? 0);
+    const station = clamp01(f.stationarity_index ?? 0);
+
+    let traffic = 0.55 + 0.35*low + 0.20*flat + 0.10*(1-flux) + 0.10*(1-crest) + 0.10*(1-onsets);
+    let wind = 0.20 + 0.45*flat + 0.35*high + 0.10*(1-tonal) + 0.10*(1-onsets);
+    let water = 0.10 + 0.25*flat + 0.20*mid + 0.25*high + 0.20*flux + 0.10*(1-tonal);
+    let plant = 0.15 + 0.35*low + 0.25*mid + 0.35*tonal + 0.20*(1-flux) + 0.10*(1-onsets);
+
+    const bed=[["Traffic",Math.max(0.01,traffic)],["Wind/Foliage",Math.max(0.01,wind)],["Water",Math.max(0.01,water)],["Mechanical/Plant",Math.max(0.01,plant)]];
+    const sum=bed.reduce((a,b)=>a+b[1],0);
+    const bedPct=bed.map(([k,v])=>[k,100*v/sum]).sort((a,b)=>b[1]-a[1]);
+
+    const voices = 0.6*mid + 0.5*mod + 0.4*onsets - 0.2*low;
+    const birds  = 0.6*high + 0.6*flux + 0.5*onsets - 0.2*low;
+    const constr = 0.6*onsets + 0.5*crest + 0.4*flux + 0.2*mid;
+    const music  = 0.4*tonal + 0.3*mid + 0.2*mod + 0.2*high;
+    const sirenGate = (tonal>0.55 && mod>0.35 && crest>0.35 && high>0.25) ? 1 : 0;
+    const siren = sirenGate ? (0.9*tonal+0.6*mod+0.5*crest+0.3*high) : 0.0;
+
+    const eventsRaw=[["Voices",voices],["Birds",birds],["Construction",constr],["Music",music],["Siren/Alarm",siren]]
+      .map(([k,v])=>[k,Math.max(0,v)])
+      .filter(([k,v])=>v>0.6 || (k==="Siren/Alarm" && v>0))
+      .sort((a,b)=>b[1]-a[1])
+      .slice(0,4);
+
+    const esum=eventsRaw.reduce((a,b)=>a+b[1],0) || 1;
+    const eventsPct=eventsRaw.map(([k,v])=>[k,100*v/esum]);
+
+    const levelNorm=clamp01((f.level_dbfs + 50)/40); // relative
+    let ev = clamp01(0.55*flux + 0.45*onsets + 0.25*mod + 0.20*crest - 0.20*station);
+    let pl = clamp01(0.35*(1-levelNorm) + 0.15*station + 0.10*(1-high) + 0.10*(1-tonal) + 0.10*(1-mod));
+
+    const trafficPct = (bedPct.find(x=>x[0]==="Traffic")?.[1] ?? 0)/100;
+    const windPct = (bedPct.find(x=>x[0]==="Wind/Foliage")?.[1] ?? 0)/100;
+    const waterPct = (bedPct.find(x=>x[0]==="Water")?.[1] ?? 0)/100;
+    const plantPct = (bedPct.find(x=>x[0]==="Mechanical/Plant")?.[1] ?? 0)/100;
+
+    pl += 0.15*waterPct + 0.10*windPct;
+    pl -= 0.18*trafficPct + 0.12*plantPct;
+    if (eventsPct.some(x=>x[0]==="Birds")) pl += 0.06;
+    if (eventsPct.some(x=>x[0]==="Siren/Alarm")) pl -= 0.20;
+    pl = clamp01(pl);
+
+    const conf = clamp01(0.55 + 0.20*flux + 0.15*onsets + 0.10*crest - 0.15*(flat>0.7 && flux<0.1 ? 1 : 0));
+    const confLabel = conf>0.75?"High":(conf>0.55?"Medium":"Low");
+
+    return { bed: bedPct, events: eventsPct, predicted: { pleasant_pred: Math.round(pl*100), eventful_pred: Math.round(ev*100), confidence: confLabel, confidence_score: conf } };
+  }
+
+  function mixText(m){
+    const bed=m.bed.slice(0,3).map(x=>`${x[0]} ${x[1].toFixed(0)}%`).join(" | ");
+    const ev = m.events.length ? ("; Events: " + m.events.slice(0,2).map(x=>`${x[0]} ${x[1].toFixed(0)}%`).join(" | ")) : "";
+    return bed + ev;
+  }
+
+  async function getGeo(){
+    if(!state.consent.geo) return null;
+    if(!navigator.geolocation) return null;
+    return new Promise((resolve)=>{
+      navigator.geolocation.getCurrentPosition(
+        (pos)=>resolve({ lat:pos.coords.latitude, lon:pos.coords.longitude, acc_m:pos.coords.accuracy }),
+        ()=>resolve(null),
+        { enableHighAccuracy:false, timeout:6000, maximumAge:60000 }
+      );
+    });
+  }
+
+  function recordClip(){
+    return new Promise(async (resolve,reject)=>{
+      try{ await ensureMic(); } catch(e){ reject(e); return; }
+      const mime=pickMimeType();
+      const chunks=[];
+      const ts=new Date().toISOString();
+      let mr;
+      try{ mr=new MediaRecorder(state.stream, mime ? {mimeType:mime} : undefined); }
+      catch(e){ reject(e); return; }
+      mr.ondataavailable=(evt)=>{ if(evt.data && evt.data.size>0) chunks.push(evt.data); };
+      mr.onstop=()=>{
+        const blob=new Blob(chunks,{type: mr.mimeType || "audio/webm"});
+        resolve({blob, ts, mime: blob.type});
+      };
+      mr.start();
+      el("scan-state").textContent="Recording…";
+      let rem=state.settings.clipLen;
+      el("scan-timer").textContent=rem+"s";
+      const t=setInterval(()=>{
+        rem-=1;
+        el("scan-timer").textContent=rem+"s";
+        if(rem<=0){
+          clearInterval(t);
+          try{ mr.stop(); }catch{}
+        }
+      },1000);
+    });
+  }
+
+  async function loadFirebaseIfNeeded(){
+    if (!state.settings.backendEnabled) return false;
+    if (state.fb.loaded) return state.fb.enabled;
+
+    let cfg=null;
+    try{ cfg=JSON.parse(state.settings.fbConfigText || "{}"); } catch { cfg=null; }
+    if(!cfg || !cfg.apiKey || !cfg.projectId){
+      el("backend-pill").textContent="Backend: Invalid config";
+      return false;
+    }
+
+    await new Promise((resolve,reject)=>{
+      const s=document.createElement("script");
+      s.src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js";
+      s.onload=resolve; s.onerror=reject;
+      document.head.appendChild(s);
+    });
+    await new Promise((resolve,reject)=>{
+      const s=document.createElement("script");
+      s.src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js";
+      s.onload=resolve; s.onerror=reject;
+      document.head.appendChild(s);
+    });
+
+    try{
+      state.fb.app = firebase.initializeApp(cfg);
+      state.fb.db = firebase.firestore();
+      state.fb.enabled = true;
+      state.fb.loaded = true;
+      el("backend-pill").textContent="Backend: On";
+      return true;
+    } catch(e){
+      state.fb.enabled=false;
+      state.fb.loaded=true;
+      el("backend-pill").textContent="Backend: Failed";
+      return false;
+    }
+  }
+
+  async function uploadScan(scan){
+    const ok = await loadFirebaseIfNeeded();
+    if(!ok) throw new Error("Backend not enabled/available.");
+    const col = (state.settings.fbCollection || "soundscape_scans").trim() || "soundscape_scans";
+    const payload = {...scan};
+    delete payload.audio_blob;
+    payload.uploaded_at = new Date().toISOString();
+    await state.fb.db.collection(col).doc(scan.id).set(payload);
+  }
+
+  async function updateQueueCount(){
+    const q = await idbGetAll(STORES.queue);
+    el("scan-queue").textContent = "Queue: " + q.length;
+  }
+
+  async function processOneScan(){
+    el("scan-status").textContent="";
+    try{
+      const geo = await getGeo();
+      const rec = await recordClip();
+      el("scan-state").textContent="Processing…";
+      el("scan-timer").textContent="";
+
+      const features = await extractFeaturesFromBlob(rec.blob, state.settings.detail);
+      const mix = suggestMix(features);
+
+      const id = (crypto && crypto.randomUUID) ? crypto.randomUUID() : (Math.random().toString(16).slice(2)+Date.now());
+      const storeAudio = !!state.settings.storeAudio;
+      const scan = {
+        id,
+        ts: rec.ts,
+        clip_len_s: state.settings.clipLen,
+        mime_type: rec.mime,
+        geo: geo,
+        consent: {...state.consent},
+        ctx: "",
+        purpose: "",
+        tags: "",
+        user_pleasantness: null,
+        user_eventfulness: null,
+        features,
+        mix_bed: mix.bed,
+        mix_events: mix.events,
+        predicted: mix.predicted,
+        audio_blob: storeAudio ? rec.blob : null
+      };
+
+      state.pending = scan;
+      if (state.pendingUrl) { URL.revokeObjectURL(state.pendingUrl); state.pendingUrl=null; }
+      if (storeAudio && scan.audio_blob){
+        state.pendingUrl = URL.createObjectURL(scan.audio_blob);
+        el("r-audio").src = state.pendingUrl;
+      } else {
+        el("r-audio").removeAttribute("src");
+      }
+
+      el("r-meta").textContent = `${scan.ts} • ${scan.clip_len_s}s` + (geo ? ` • GPS±${Math.round(geo.acc_m)}m` : "");
+      el("r-pred").textContent = `Pred P/E: ${scan.predicted.pleasant_pred}/${scan.predicted.eventful_pred}`;
+      el("r-conf").textContent = `Conf: ${scan.predicted.confidence}`;
+      el("r-upload").textContent = state.consent.upload ? "Upload: Yes" : "Upload: No";
+      el("mix-box").textContent = mixText({bed: scan.mix_bed, events: scan.mix_events});
+      el("feat-box").textContent = JSON.stringify(scan.features, null, 2);
+
+      el("p-slider").value="50"; el("p-val").textContent="50";
+      el("e-slider").value="50"; el("e-val").textContent="50";
+      el("ctx").value=""; el("purpose").value=""; el("tags").value="";
+      el("scan-state").textContent="Ready";
+      show("p-rate");
+    } catch(e){
+      el("scan-state").textContent="Ready";
+      el("scan-status").textContent="Error: " + (e.message || e);
+    }
+  }
+
+  async function commitPending(withRating){
+    if(!state.pending) return;
+    const scan = state.pending;
+
+    if(withRating){
+      scan.user_pleasantness = parseInt(el("p-slider").value,10);
+      scan.user_eventfulness = parseInt(el("e-slider").value,10);
+      scan.ctx = el("ctx").value || "";
+      scan.purpose = el("purpose").value || "";
+      scan.tags = (el("tags").value || "").trim();
+    }
+
+    await idbPut(STORES.scans, {...scan, audio_blob: scan.audio_blob});
+
+    if (state.consent.upload && state.settings.backendEnabled){
+      const qItem = {...scan};
+      qItem.audio_blob = null;
+      await idbPut(STORES.queue, qItem);
+      await updateQueueCount();
+      el("rate-status").textContent = "Saved locally and queued for upload.";
+    } else {
+      await updateQueueCount();
+      el("rate-status").textContent = "Saved locally.";
+    }
+
+    state.pending = null;
+    show("p-scan");
+  }
+
+  async function discardPending(){
+    state.pending=null;
+    el("rate-status").textContent="";
+    show("p-scan");
+  }
+
+  async function syncQueue(){
+    el("scan-status").textContent="";
+    try{
+      if(!(state.consent.upload && state.settings.backendEnabled)){
+        el("scan-status").textContent="Upload not enabled (consent or settings).";
+        return;
+      }
+      await loadFirebaseIfNeeded();
+      if(!state.fb.enabled){
+        el("scan-status").textContent="Backend not available. Check config.";
+        return;
+      }
+      const items = await idbGetAll(STORES.queue);
+      if(!items.length){
+        el("scan-status").textContent="Queue empty.";
+        return;
+      }
+      el("scan-status").textContent=`Uploading ${items.length}…`;
+      let ok=0, fail=0;
+      for(const it of items){
+        try{
+          await uploadScan(it);
+          await idbDelete(STORES.queue, it.id);
+          ok++;
+        } catch(e){
+          fail++;
+        }
+      }
+      await updateQueueCount();
+      el("scan-status").textContent = `Sync complete. Uploaded: ${ok}. Failed: ${fail}.`;
+    } catch(e){
+      el("scan-status").textContent="Sync error: " + (e.message || e);
+    }
+  }
+
+  function escapeHtml(str){
+    return String(str).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;").replaceAll("'","&#039;");
+  }
+  function fmtDate(iso){ try{ return new Date(iso).toLocaleString(); } catch { return iso; } }
+
+  async function renderHistory(){
+    el("hist-status").textContent="Loading…";
+    const scans = await idbGetAll(STORES.scans);
+    scans.sort((a,b)=>(b.ts||"").localeCompare(a.ts||""));
+    if(!scans.length){
+      el("hist-table").innerHTML="<i>No scans yet.</i>";
+      el("hist-status").textContent="";
+      return;
+    }
+    const rows = scans.slice(0,60).map((s,idx)=>{
+      const pe = s.user_pleasantness!==null ? `${s.user_pleasantness}/${s.user_eventfulness}` : "<i>unrated</i>";
+      const pred = s.predicted ? `${s.predicted.pleasant_pred}/${s.predicted.eventful_pred} (${s.predicted.confidence})` : "—";
+      const gps = s.geo ? `±${Math.round(s.geo.acc_m)}m` : "";
+      const bed = (s.mix_bed||[]).slice(0,1).map(x=>`${x[0]} ${x[1].toFixed(0)}%`).join("");
+      return `<tr>
+        <td>${idx+1}</td>
+        <td>${escapeHtml(fmtDate(s.ts))}</td>
+        <td>${pred}</td>
+        <td>${pe}</td>
+        <td>${escapeHtml(s.ctx||"")}</td>
+        <td>${escapeHtml(s.purpose||"")}</td>
+        <td>${escapeHtml(s.tags||"")}</td>
+        <td>${escapeHtml(bed)}</td>
+        <td>${gps}</td>
+      </tr>`;
+    }).join("");
+    el("hist-table").innerHTML = `<table>
+      <thead><tr>
+        <th>#</th><th>Time</th><th>Pred P/E</th><th>Your P/E</th><th>Context</th><th>Purpose</th><th>Tags</th><th>Bed lead</th><th>GPS</th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
+    el("hist-status").textContent="";
+  }
+
+  function downloadText(filename, text, mime="application/json"){
+    const blob = new Blob([text], {type:mime});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function exportJSON(){
+    const scans = await idbGetAll(STORES.scans);
+    const q = await idbGetAll(STORES.queue);
+    const out = {
+      exported_at: new Date().toISOString(),
+      settings: state.settings,
+      scans: scans.map(s=>{ const x={...s}; x.audio_blob=null; return x; }),
+      queue: q
+    };
+    const stamp = new Date().toISOString().replaceAll(":","-");
+    downloadText(`soundscape_chunk4_export_${stamp}.json`, JSON.stringify(out,null,2));
+  }
+
+  updateSecurePill();
+
+  el("set-cliplen").value = String(state.settings.clipLen);
+  el("set-detail").value = state.settings.detail;
+  el("set-store-audio").checked = state.settings.storeAudio;
+  el("set-enable-backend").checked = state.settings.backendEnabled;
+  el("fb-config").value = state.settings.fbConfigText;
+  el("fb-collection").value = state.settings.fbCollection;
+
+  el("btn-settings").addEventListener("click", ()=>show("p-settings"));
+  el("btn-back-consent").addEventListener("click", ()=>show("p-consent"));
+
+  el("btn-save-settings").addEventListener("click", async ()=>{
+    state.settings.clipLen = parseInt(el("set-cliplen").value,10);
+    state.settings.detail = el("set-detail").value;
+    state.settings.storeAudio = el("set-store-audio").checked;
+
+    state.settings.backendEnabled = el("set-enable-backend").checked;
+    state.settings.fbConfigText = el("fb-config").value.trim();
+    state.settings.fbCollection = (el("fb-collection").value || "soundscape_scans").trim() || "soundscape_scans";
+
+    state.fb.loaded = false;
+    state.fb.enabled = false;
+    el("backend-pill").textContent = state.settings.backendEnabled ? "Backend: Pending" : "Backend: Off";
+    el("settings-status").textContent = "Saved.";
+  });
+
+  el("btn-start").addEventListener("click", async ()=>{
+    state.consent.audio = el("c-audio").checked;
+    state.consent.geo = el("c-geo").checked;
+    state.consent.upload = el("c-upload").checked;
+
+    if(!state.consent.audio){
+      el("consent-status").textContent="Audio consent required.";
+      return;
+    }
+    el("consent-status").textContent="";
+    show("p-scan");
+    await updateQueueCount();
+  });
+
+  el("btn-record").addEventListener("click", processOneScan);
+
+  el("p-slider").addEventListener("input", ()=>el("p-val").textContent=el("p-slider").value);
+  el("e-slider").addEventListener("input", ()=>el("e-val").textContent=el("e-slider").value);
+
+  el("btn-save").addEventListener("click", ()=>commitPending(true));
+  el("btn-skip").addEventListener("click", ()=>commitPending(false));
+  el("btn-discard").addEventListener("click", discardPending);
+
+  el("btn-history").addEventListener("click", async ()=>{ show("p-history"); await renderHistory(); });
+  el("btn-back-scan").addEventListener("click", async ()=>{ show("p-scan"); await updateQueueCount(); });
+
+  el("btn-export").addEventListener("click", exportJSON);
+
+  el("btn-clear").addEventListener("click", async ()=>{
+    if(!confirm("Clear all local scans and queue on this device?")) return;
+    await idbClear(STORES.scans);
+    await idbClear(STORES.queue);
+    await updateQueueCount();
+    await renderHistory();
+  });
+
+  el("btn-sync").addEventListener("click", syncQueue);
+
+  el("btn-end").addEventListener("click", async ()=>{
+    state.pending=null;
+    if(state.stream){
+      state.stream.getTracks().forEach(t=>t.stop());
+      state.stream=null;
+    }
+    stopLive();
+    show("p-consent");
+  });
+
+  show("p-consent");
+})();
+</script>
+</body>
+</html>
